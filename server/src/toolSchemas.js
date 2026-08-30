@@ -139,8 +139,8 @@ export const TOOL_SCHEMAS = [
 ];
 
 /** Azure OpenAI / OpenAI expect the same JSON Schema under a different envelope. */
-export const toOpenAITools = () =>
-  TOOL_SCHEMAS.map((tool) => ({
+export const toOpenAITools = (schemas = TOOL_SCHEMAS) =>
+  schemas.map((tool) => ({
     type: "function",
     function: {
       name: tool.name,

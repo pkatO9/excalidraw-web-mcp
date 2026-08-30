@@ -334,3 +334,39 @@
     }
   }
 }
+
+// The tutor's Teach/Stop button, beside Send and the mic. Styled like the mic
+// button so the actions row reads as one family.
+.ai-tutor {
+  &__teach {
+    flex: 0 0 auto;
+    font: inherit;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 0 0.6rem;
+    border: 1px solid var(--color-gray-30);
+    border-radius: 0.5rem;
+    background: var(--island-bg-color);
+    color: inherit;
+
+    &:hover {
+      border-color: var(--color-primary);
+      color: var(--color-primary);
+    }
+
+    // Speaking: pulse like the live mic so it is obvious a lesson is playing,
+    // but in the primary colour — this is output, not recording.
+    &--on {
+      background: var(--color-primary);
+      border-color: var(--color-primary);
+      color: #fff;
+      animation: ai-chat-pulse 1.4s ease-in-out infinite;
+
+      &:hover {
+        color: #fff;
+      }
+    }
+  }
+}

@@ -27,8 +27,8 @@ const getClient = () => {
 };
 
 /** Neutral history -> OpenAI chat messages. */
-const toOpenAIMessages = (messages) => {
-  const out = [{ role: "system", content: SYSTEM_PROMPT }];
+const toOpenAIMessages = (messages, systemPrompt) => {
+  const out = [{ role: "system", content: systemPrompt }];
 
   for (const message of messages) {
     if (message.role === "tool") {
@@ -69,18 +69,30 @@ const toOpenAIMessages = (messages) => {
   return out;
 };
 
-export const runTurn = async (messages) => {
-  const response = await getClient().chat.completions.create({
-    model: DEPLOYMENT,
-    max_tokens: 4096,
-    // Layout is rule-following, not creative writing. Deterministic sampling
-    // makes the model actually honour the positioning rules instead of
-    // occasionally improvising a different arrangement.
-    temperature: 0,
-    messages: toOpenAIMessages(messages),
-    tools: toOpenAITools(),
-    tool_choice: "auto",
-  });
+/**
+ * One model turn. `options` lets a caller swap the persona and toolset — the
+ * tutor runs on the same providers with its own prompt and one forced tool —
+ * while the defaults keep the drawing agent's behaviour byte-for-byte.
+ */
+export const runTurn = async (messages, options = {}) => {
+  const { systemPrompt = SYSTEM_PROMPT, tools, forceTool, timeout } = options;
+
+  const response = await getClient().chat.completions.create(
+    {
+      model: DEPLOYMENT,
+      max_tokens: 4096,
+      // Layout is rule-following, not creative writing. Deterministic sampling
+      // makes the model actually honour the positioning rules instead of
+      // occasionally improvising a different arrangement.
+      temperature: 0,
+      messages: toOpenAIMessages(messages, systemPrompt),
+      tools: toOpenAITools(tools),
+      tool_choice: forceTool
+        ? { type: "function", function: { name: forceTool } }
+        : "auto",
+    },
+    ...(timeout ? [{ timeout }] : []),
+  );
 
   const choice = response.choices[0]?.message;
   const text = (choice?.content || "").trim();

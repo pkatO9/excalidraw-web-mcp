@@ -20,8 +20,9 @@ fi
 
 echo "==> 2/3  Copying the agent code in"
 mkdir -p "$APP_DIR/ai-agent" "$APP_DIR/tests"
-cp "$REPO_ROOT"/app/ai-agent/* "$APP_DIR/ai-agent/"
-cp "$REPO_ROOT"/app/tests/* "$APP_DIR/tests/"
+# -R so subdirectories (e.g. ai-agent/types/) come along too.
+cp -R "$REPO_ROOT"/app/ai-agent/* "$APP_DIR/ai-agent/"
+cp -R "$REPO_ROOT"/app/tests/* "$APP_DIR/tests/"
 echo "    ai-agent/ and tests/ copied"
 
 echo "==> 3/3  Wiring the sidebar into excalidraw-app/App.tsx"

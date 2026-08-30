@@ -45,17 +45,32 @@ const toAnthropicMessages = (messages) =>
     return { role: "user", content: message.content };
   });
 
-export const runTurn = async (messages) => {
-  const response = await getClient().messages.create({
-    model: MODEL,
-    max_tokens: 16000,
-    // Positioning is arithmetic the model has to get right; medium effort keeps
-    // the demo responsive without making it sloppy.
-    output_config: { effort: "medium" },
-    system: SYSTEM_PROMPT,
-    tools: TOOL_SCHEMAS,
-    messages: toAnthropicMessages(messages),
-  });
+/**
+ * One model turn. `options` lets a caller swap the persona and toolset (the
+ * tutor's prompt + one forced tool); defaults preserve the drawing agent.
+ */
+export const runTurn = async (messages, options = {}) => {
+  const {
+    systemPrompt = SYSTEM_PROMPT,
+    tools = TOOL_SCHEMAS,
+    forceTool,
+    timeout,
+  } = options;
+
+  const response = await getClient().messages.create(
+    {
+      model: MODEL,
+      max_tokens: 16000,
+      // Positioning is arithmetic the model has to get right; medium effort
+      // keeps the demo responsive without making it sloppy.
+      output_config: { effort: "medium" },
+      system: systemPrompt,
+      tools,
+      ...(forceTool ? { tool_choice: { type: "tool", name: forceTool } } : {}),
+      messages: toAnthropicMessages(messages),
+    },
+    ...(timeout ? [{ timeout }] : []),
+  );
 
   if (response.stop_reason === "refusal") {
     return {

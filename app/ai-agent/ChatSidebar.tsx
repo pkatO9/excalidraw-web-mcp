@@ -5,16 +5,18 @@ import {
 } from "@excalidraw/excalidraw";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { API_BASE } from "./config";
 import { executeTool, get_scene } from "./toolLayer";
+import { TutorControls } from "./TutorControls";
+import { useDictation } from "./useDictation";
+import { useResizableSidebar } from "./useResizableSidebar";
 
 import "./ChatSidebar.scss";
 
 import type { SceneElementSummary } from "./toolLayer";
+import type { AgentMessage, ChatEntry } from "./types/chat";
 
 export const AI_SIDEBAR_NAME = "ai-agent";
-
-const API_BASE =
-  (import.meta as any).env?.VITE_AGENT_API || "http://localhost:8787";
 
 /** Hard stop so a confused model cannot spin forever against the canvas. */
 const MAX_TURNS = 12;
@@ -28,32 +30,6 @@ const COLLAPSED_REFERENCE_COUNT = 4;
 
 /** Labels echoed into the transcript before it summarises the rest. */
 const ECHOED_REFERENCE_COUNT = 3;
-
-/** Message shape the backend speaks (see server/src/index.js). */
-type AgentMessage =
-  | { role: "user"; content: string }
-  | {
-      role: "assistant";
-      content: string;
-      raw?: unknown;
-      toolCalls?: { id: string; name: string; input: unknown }[];
-    }
-  | {
-      role: "tool";
-      results: {
-        id: string;
-        name: string;
-        content: string;
-        isError?: boolean;
-      }[];
-    };
-
-/** What the user actually sees in the transcript. */
-type ChatEntry =
-  | { kind: "user"; text: string }
-  | { kind: "assistant"; text: string }
-  | { kind: "tool"; text: string; failed: boolean }
-  | { kind: "error"; text: string };
 
 /**
  * Short echo of what a message referred to. Selecting a whole diagram would
@@ -116,88 +92,9 @@ const useSelectionReferences = (
   return { references, dismiss, clear };
 };
 
-const DEFAULT_SIDEBAR_WIDTH = 302; // matches RIGHT_SIDEBAR_WIDTH upstream
-const MIN_SIDEBAR_WIDTH = 280;
-const MAX_SIDEBAR_WIDTH = 900;
-const WIDTH_STORAGE_KEY = "ai-agent:sidebar-width";
-const WIDTH_STYLE_ID = "ai-agent-sidebar-width";
-
-const clampWidth = (value: number) =>
-  Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, Math.round(value)));
-
-/**
- * Makes the docked sidebar horizontally resizable.
- *
- * Upstream sets `--right-sidebar-width` as an inline style on the .excalidraw
- * container, and the editor also uses that variable to reserve canvas space —
- * so overriding it resizes the panel and reflows the canvas together. We write
- * the override as a stylesheet rule with !important rather than touching the
- * element's style, because React owns that inline style and would clobber us on
- * the next render.
- */
-const useResizableSidebar = () => {
-  const [width, setWidth] = useState<number>(() => {
-    try {
-      const stored = Number(localStorage.getItem(WIDTH_STORAGE_KEY));
-      return stored ? clampWidth(stored) : DEFAULT_SIDEBAR_WIDTH;
-    } catch {
-      return DEFAULT_SIDEBAR_WIDTH;
-    }
-  });
-
-  useEffect(() => {
-    let style = document.getElementById(
-      WIDTH_STYLE_ID,
-    ) as HTMLStyleElement | null;
-    if (!style) {
-      style = document.createElement("style");
-      style.id = WIDTH_STYLE_ID;
-      document.head.appendChild(style);
-    }
-    style.textContent = `.excalidraw { --right-sidebar-width: ${width}px !important; }`;
-
-    try {
-      localStorage.setItem(WIDTH_STORAGE_KEY, String(width));
-    } catch {
-      // a browser with site data blocked still resizes, it just will not persist
-    }
-  }, [width]);
-
-  // Drag right-to-left to widen, since the panel is anchored to the right edge.
-  const onResizeStart = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      event.preventDefault();
-      const startX = event.clientX;
-      const startWidth = width;
-      const handle = event.currentTarget;
-      handle.setPointerCapture(event.pointerId);
-
-      const onMove = (moveEvent: PointerEvent) => {
-        setWidth(clampWidth(startWidth - (moveEvent.clientX - startX)));
-      };
-      const onUp = () => {
-        handle.releasePointerCapture(event.pointerId);
-        handle.removeEventListener("pointermove", onMove);
-        handle.removeEventListener("pointerup", onUp);
-      };
-
-      handle.addEventListener("pointermove", onMove);
-      handle.addEventListener("pointerup", onUp);
-    },
-    [width],
-  );
-
-  const resetWidth = useCallback(() => setWidth(DEFAULT_SIDEBAR_WIDTH), []);
-
-  return { onResizeStart, resetWidth };
-};
-
-/** Chrome's built-in speech recognition, if this browser has it. */
-const getSpeechRecognition = (): any =>
-  typeof window === "undefined"
-    ? undefined
-    : (window as any).SpeechRecognition ??
-      (window as any).webkitSpeechRecognition;
+/** "teach", "teach me", "teach me this diagram" — the spoken-lesson trigger. */
+const isTeachCommand = (text: string) =>
+  /^teach(\s+me)?(\s+(this|the))?(\s+diagram)?\s*[.!]?$/i.test(text);
 
 export const AIChatSidebar = () => {
   const excalidrawAPI = useExcalidrawAPI();
@@ -205,22 +102,30 @@ export const AIChatSidebar = () => {
   const [entries, setEntries] = useState<ChatEntry[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const [listening, setListening] = useState(false);
 
   const { references, dismiss, clear } = useSelectionReferences(excalidrawAPI);
   const [referencesExpanded, setReferencesExpanded] = useState(false);
   const { onResizeStart, resetWidth } = useResizableSidebar();
+  const { listening, speechSupported, toggleDictation, stopDictation } =
+    useDictation(input, setInput);
 
   // The full conversation in the backend's format. Kept in a ref because the
   // agent loop mutates it across several awaits within a single send.
   const history = useRef<AgentMessage[]>([]);
   const transcriptRef = useRef<HTMLDivElement>(null);
-  const recognitionRef = useRef<any>(null);
 
-  const speechSupported = useMemo(() => Boolean(getSpeechRecognition()), []);
+  // TutorControls hands us its teach() so typing "teach" can trigger a lesson.
+  const teachRef = useRef<(() => void) | null>(null);
 
   const append = useCallback((entry: ChatEntry) => {
     setEntries((current) => [...current, entry]);
+  }, []);
+
+  // The finished walkthrough joins the chat history, so a follow-up like
+  // "why is there a load balancer?" has the lesson as context.
+  const recordLesson = useCallback((content: string) => {
+    history.current.push({ role: "user", content: "Teach me this diagram." });
+    history.current.push({ role: "assistant", content });
   }, []);
 
   useEffect(() => {
@@ -230,55 +135,20 @@ export const AIChatSidebar = () => {
     });
   }, [entries]);
 
-  // Stop the microphone if the sidebar goes away mid-dictation.
-  useEffect(
-    () => () => {
-      recognitionRef.current?.abort?.();
-    },
-    [],
-  );
-
-  const toggleDictation = useCallback(() => {
-    if (listening) {
-      recognitionRef.current?.stop?.();
-      return;
-    }
-
-    const Recognition = getSpeechRecognition();
-    if (!Recognition) {
-      return;
-    }
-
-    const recognition = new Recognition();
-    recognition.lang = navigator.language || "en-US";
-    recognition.interimResults = true;
-    recognition.continuous = false;
-
-    // Dictation appends to whatever is already typed rather than replacing it.
-    const base = input.trim() ? `${input.trim()} ` : "";
-
-    recognition.onresult = (event: any) => {
-      let transcript = "";
-      for (let i = 0; i < event.results.length; i++) {
-        transcript += event.results[i][0].transcript;
-      }
-      setInput(base + transcript);
-    };
-    recognition.onerror = () => setListening(false);
-    recognition.onend = () => setListening(false);
-
-    recognitionRef.current = recognition;
-    recognition.start();
-    setListening(true);
-  }, [input, listening]);
-
   const send = useCallback(async () => {
     const text = input.trim();
     if (!text || busy || !excalidrawAPI) {
       return;
     }
 
-    recognitionRef.current?.stop?.();
+    stopDictation();
+
+    // "teach" is a command, not a chat message: hand it to the tutor.
+    if (isTeachCommand(text)) {
+      setInput("");
+      teachRef.current?.();
+      return;
+    }
 
     // Snapshot the pills now — the canvas selection changes as the agent draws.
     const attached = references;
@@ -371,7 +241,7 @@ export const AIChatSidebar = () => {
       clear();
       setReferencesExpanded(false);
     }
-  }, [append, busy, clear, excalidrawAPI, input, references]);
+  }, [append, busy, clear, excalidrawAPI, input, references, stopDictation]);
 
   return (
     <Sidebar name={AI_SIDEBAR_NAME} docked>
@@ -524,6 +394,11 @@ export const AIChatSidebar = () => {
                 <MicIcon />
               </button>
             )}
+            <TutorControls
+              onEntry={append}
+              onAssistantMessage={recordLesson}
+              teachRef={teachRef}
+            />
           </div>
         </form>
       </div>

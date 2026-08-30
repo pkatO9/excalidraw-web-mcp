@@ -15,12 +15,15 @@ import { executeTool, get_scene } from "../ai-agent/toolLayer";
  */
 const API_BASE = process.env.AGENT_API ?? "http://localhost:8787";
 
-const backendUp = await fetch(`${API_BASE}/api/health`)
-  .then((r) => r.ok)
-  .catch(() => false);
+const health = await fetch(`${API_BASE}/api/health`)
+  .then((r) => (r.ok ? r.json() : null))
+  .catch(() => null);
+const backendUp = Boolean(health);
 
 // `describe.skipIf` is not in the ambient test typings here, so branch manually.
 const describeE2E = backendUp ? describe : describe.skip;
+// The tutor additionally needs TTS credentials on the backend.
+const describeTutorE2E = backendUp && health?.tts ? describe : describe.skip;
 
 describeE2E("AI agent end-to-end", () => {
   let api: ExcalidrawImperativeAPI;
@@ -161,6 +164,78 @@ describeE2E("AI agent end-to-end", () => {
     const gap = Math.abs(cache!.x - database!.x) - database!.width;
     expect(gap).toBeGreaterThan(0);
     expect(gap).toBeLessThan(400);
+  }, 300000);
+});
+
+describeTutorE2E("AI tutor end-to-end", () => {
+  let api: ExcalidrawImperativeAPI;
+
+  beforeAll(async () => {
+    const apiPromise = resolvablePromise<ExcalidrawImperativeAPI>();
+    await render(
+      <Excalidraw onExcalidrawAPI={(a) => apiPromise.resolve(a as any)} />,
+    );
+    api = await apiPromise;
+
+    // A small but real diagram to teach.
+    const lb = executeTool(api, "add_rectangle", {
+      x: 200,
+      y: 120,
+      width: 180,
+      height: 80,
+      label: "Load Balancer",
+    }) as any;
+    const db = executeTool(api, "add_rectangle", {
+      x: 200,
+      y: 320,
+      width: 180,
+      height: 80,
+      label: "Database",
+    }) as any;
+    executeTool(api, "bind_arrow", {
+      source_id: lb.result.id,
+      target_id: db.result.id,
+    });
+  });
+
+  it("produces a lesson whose every segment points at real elements", async () => {
+    const scene = get_scene(api);
+    const response = await fetch(`${API_BASE}/api/tutor/lesson`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scene }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error);
+    }
+
+    const { lesson } = data;
+    expect(lesson.intro.length).toBeGreaterThan(0);
+    expect(lesson.closing.length).toBeGreaterThan(0);
+    expect(lesson.segments.length).toBeGreaterThan(0);
+
+    const ids = new Set(scene.map((el) => el.id));
+    for (const segment of lesson.segments) {
+      expect(segment.narration.length).toBeGreaterThan(0);
+      expect(segment.elementIds.length).toBeGreaterThan(0);
+      for (const id of segment.elementIds) {
+        expect(ids.has(id)).toBe(true);
+      }
+    }
+  }, 300000);
+
+  it("synthesizes non-empty mpeg audio for a narration line", async () => {
+    const response = await fetch(`${API_BASE}/api/tutor/speech`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "This is the load balancer." }),
+    });
+
+    expect(response.ok).toBe(true);
+    expect(response.headers.get("content-type")).toContain("audio/mpeg");
+    const bytes = await response.arrayBuffer();
+    expect(bytes.byteLength).toBeGreaterThan(1000);
   }, 300000);
 });
 
