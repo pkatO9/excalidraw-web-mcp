@@ -132,6 +132,46 @@ together. The override is written as a stylesheet rule with `!important` rather 
 inline style, because React owns the inline style on that container and would otherwise
 clobber it on the next render.
 
+## Live voice agent
+
+Click **Talk** in the panel and hold a spoken conversation with the agent while it draws.
+It listens continuously, answers out loud, asks clarifying questions, pushes back when a
+design looks wrong, and calls the same tools the typed agent uses. You can talk over it
+to cut it off mid-sentence.
+
+**Architecture.** One WebSocket carries everything — microphone audio up, spoken audio
+and tool calls down — via the Azure OpenAI **Realtime** API (`gpt-realtime-2`):
+
+```
+browser ──ws──► server /api/realtime ──wss (api-key)──► Azure Realtime
+  mic PCM16 24k                                          speech-to-speech
+  speaker ◄── audio deltas                               + function calling
+  tools ──► excalidrawAPI
+```
+
+Three decisions worth stating:
+
+- **Speech-to-speech, not STT + LLM + TTS.** One model hears audio and answers with audio
+  and function calls on the same stream, so there are no three hops to keep in sync and
+  no transcription round trip before it can start replying. Separate STT/TTS services
+  (OpenAI or Sarvam) would each add a leg of latency for no gain here.
+- **The server proxies the socket** rather than minting a client token. The Azure key
+  never reaches the browser, and because the server is the only thing that sends
+  `session.update`, a tampered client cannot swap the instructions or widen the tool
+  list — it can only speak and listen.
+- **Server-side VAD with `interrupt_response`** makes it hands-free and interruptible.
+  Barge-in is most of what separates a live agent from a turn-based one.
+
+The voice agent deliberately does **not** get the `teach_diagram` tool: the tutor narrates
+through a separate mp3 pipeline, and two voices at once is never what anyone wants — a
+live agent explaining the diagram conversationally is the better answer anyway.
+
+Spoken turns are mirrored into the same transcript and the same history as typed ones, so
+switching between talking and typing continues one conversation.
+
+Configure with `AZURE_OPENAI_REALTIME_DEPLOYMENT` / `_API_VERSION` / `_VOICE`; it reuses
+the existing endpoint and key.
+
 ## Selecting shapes as chat references
 
 Select anything on the canvas and it appears as a **pill** above the chat input — the

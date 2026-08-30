@@ -4,6 +4,7 @@ import express from "express";
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 
+import { attachRealtime } from "./realtime.js";
 import { formatReferences, formatSceneContext } from "./systemPrompt.js";
 import { isTtsConfigured, runTutorLesson, synthesizeSpeech } from "./tutor.js";
 import { lessonRequestSchema, speechRequestSchema } from "./tutorSchema.js";
@@ -34,7 +35,7 @@ import { lessonRequestSchema, speechRequestSchema } from "./tutorSchema.js";
 
 const app = express();
 app.use(helmet());
-app.use(cors());
+app.use(cors(process.env.FRONTEND_ORIGIN ? { origin: process.env.FRONTEND_ORIGIN } : undefined));
 app.use(express.json({ limit: "5mb" }));
 
 /**
@@ -204,8 +205,12 @@ app.post("/api/chat", async (req, res) => {
 });
 
 const PORT = process.env.PORT || 8787;
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(
     `[excalidraw-web-mcp] listening on :${PORT} (default provider: ${DEFAULT_PROVIDER})`,
   );
 });
+
+// The live voice agent shares this HTTP server, upgrading to a WebSocket on
+// /api/realtime. Same process, same credentials, no extra port to configure.
+attachRealtime(server);
