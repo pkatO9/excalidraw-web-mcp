@@ -147,9 +147,7 @@ const runLesson = async (
   } catch (error) {
     // An aborted fetch is the user pressing Stop, not a failure.
     if (!own.signal.aborted) {
-      sinks?.onError(
-        error instanceof Error ? error.message : String(error),
-      );
+      sinks?.onError(error instanceof Error ? error.message : String(error));
     }
   } finally {
     if (controller === own) {

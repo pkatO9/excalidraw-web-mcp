@@ -251,7 +251,10 @@ export const playLesson = async (
     // (abort) without awaiting one, its failure must not become an unhandled
     // rejection. The guard never swallows an error the loop still awaits —
     // `await` on an already-handled promise still sees the rejection.
-    let upcoming: Promise<Blob> | null = fetchSpeech(chunks[0].narration, signal);
+    let upcoming: Promise<Blob> | null = fetchSpeech(
+      chunks[0].narration,
+      signal,
+    );
     upcoming.catch(() => {});
 
     for (let i = 0; i < chunks.length; i++) {

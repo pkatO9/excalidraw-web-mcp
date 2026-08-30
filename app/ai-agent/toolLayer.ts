@@ -5,11 +5,11 @@ import {
   convertToExcalidrawElements,
 } from "@excalidraw/excalidraw";
 
-import { startLesson } from "./tutorSession";
-
 import type { ExcalidrawElementSkeleton } from "@excalidraw/element/transform";
 import type { ExcalidrawElement } from "@excalidraw/element/types";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
+
+import { startLesson } from "./tutorSession";
 
 /**
  * The "tool layer": the only code that touches the live Excalidraw scene.
