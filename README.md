@@ -99,7 +99,30 @@ Both are set in the tool layer rather than left to the prompt, so they hold on e
 regardless of what the model does. Passing an explicit `fillStyle` (`solid` /
 `cross-hatch`) still overrides it.
 
-### Colour is opt-in
+## Selecting shapes as chat references
+
+Select anything on the canvas and it appears as a **pill** above the chat input — the
+same idea as selecting code in an editor before asking a question about it. Those
+elements are sent alongside the message, so demonstratives resolve to real ids:
+
+| You select | You type | What happens |
+|---|---|---|
+| the Database box | "make this blue" | `set_style(["<db id>"], …)` — only that box |
+| Load Balancer + Database | "connect these" | `bind_arrow(lb, db)`, in the order listed |
+
+Pills track the live selection and each has an `×` to drop it; deselecting and
+reselecting brings it back. They are snapshotted at send time, so they stay correct
+while the agent redraws the canvas. The system prompt tells the model to resolve
+"this"/"these"/"it" to those ids and never to guess from labels.
+
+## Dictation
+
+A mic button sits beside **Send**, using the browser's built-in
+`SpeechRecognition` (Chrome's standard STT — no API key, no audio leaves the browser).
+Dictation appends to whatever is already typed. The button is hidden entirely in
+browsers without the API, so Firefox users just see **Send**.
+
+## Colour is opt-in
 
 Diagrams render black-and-white unless the user asks for colour — the prompt forbids
 volunteering it. When colour *is* requested:

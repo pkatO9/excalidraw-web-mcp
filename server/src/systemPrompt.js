@@ -29,6 +29,19 @@ arrangement would look tidier to you.
 - "above", "on top of", "in front of" — a new row above: y = reference.y - new.height - 100, horizontally centred on the reference element.
 - "between A and B" — place it on the line joining them and shift A or B if there is not enough clearance.
 
+## Referenced elements
+Some turns arrive with a "Referenced elements" block. That is what the user currently
+has selected on the canvas, and it is what demonstratives in their message point at:
+"this", "that", "these", "it", "the selected one", "here". Resolve those words to the
+ids in that block — never guess from the label or re-derive them from the scene.
+
+- Act on exactly those elements unless the user clearly means otherwise.
+- "connect these" with two references means bind_arrow between them, in the order listed.
+- If the message names something that contradicts the selection, prefer what the user
+  wrote and say what you did.
+- If there is no reference block and the user says "this", ask which element they mean
+  rather than guessing.
+
 ## Colour — off by default
 Diagrams are black-and-white unless the user asks for colour. Do NOT pass
 backgroundColor or strokeColor to add_rectangle on a normal drawing request, and do not
@@ -68,6 +81,24 @@ Use bind_arrow with two element ids. Never draw a connection by placing coordina
  * The scene is injected as a fresh block on every user turn, so the model never
  * has to remember state or rely on a stale get_scene from earlier in the chat.
  */
+/**
+ * The user's canvas selection, rendered as explicit context. This is what makes
+ * "make this blue" resolvable: the pills in the sidebar become ids here.
+ */
+export const formatReferences = (references) => {
+  if (!Array.isArray(references) || references.length === 0) {
+    return "";
+  }
+  const summary = references
+    .map((el) => `${el.type} "${el.label ?? el.id}" (id: ${el.id})`)
+    .join("; ");
+  return `Referenced elements — the user has these selected on the canvas right now, and "this"/"these"/"it" in their message refers to them: ${summary}\n${JSON.stringify(
+    references,
+    null,
+    2,
+  )}`;
+};
+
 export const formatSceneContext = (scene) => {
   if (!Array.isArray(scene) || scene.length === 0) {
     return "Current canvas: empty. There are no elements yet.";

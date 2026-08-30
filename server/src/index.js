@@ -2,7 +2,7 @@ import cors from "cors";
 import "dotenv/config";
 import express from "express";
 
-import { formatSceneContext } from "./systemPrompt.js";
+import { formatReferences, formatSceneContext } from "./systemPrompt.js";
 
 /**
  * Chat-to-tool-call backend for the Excalidraw AI diagramming agent.
@@ -68,7 +68,7 @@ app.get("/api/health", (_req, res) => {
  */
 app.post("/api/chat", async (req, res) => {
   try {
-    const { messages, provider, scene } = req.body ?? {};
+    const { messages, provider, scene, references } = req.body ?? {};
 
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: "`messages` must be a non-empty array." });
@@ -86,13 +86,22 @@ app.post("/api/chat", async (req, res) => {
     // given the real canvas every single turn rather than relying on a stale
     // get_scene from earlier in the conversation.
     const prepared = [...messages];
-    if (scene !== undefined) {
+    if (scene !== undefined || references !== undefined) {
       const lastUserIndex = prepared.map((m) => m.role).lastIndexOf("user");
       if (lastUserIndex !== -1) {
         const original = prepared[lastUserIndex];
+        const blocks = [];
+        if (scene !== undefined) {
+          blocks.push(formatSceneContext(scene));
+        }
+        const referenceBlock = formatReferences(references);
+        if (referenceBlock) {
+          blocks.push(referenceBlock);
+        }
+        blocks.push(original.content);
         prepared[lastUserIndex] = {
           ...original,
-          content: `${formatSceneContext(scene)}\n\n---\n\n${original.content}`,
+          content: blocks.join("\n\n---\n\n"),
         };
       }
     }

@@ -1,9 +1,15 @@
-import { Sidebar, useExcalidrawAPI } from "@excalidraw/excalidraw";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  Sidebar,
+  useExcalidrawAPI,
+  useExcalidrawStateValue,
+} from "@excalidraw/excalidraw";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { executeTool, get_scene } from "./toolLayer";
 
 import "./ChatSidebar.scss";
+
+import type { SceneElementSummary } from "./toolLayer";
 
 export const AI_SIDEBAR_NAME = "ai-agent";
 
@@ -39,17 +45,81 @@ type ChatEntry =
   | { kind: "tool"; text: string; failed: boolean }
   | { kind: "error"; text: string };
 
+/** Human-readable name for a referenced element, for the pill. */
+const describeReference = (el: SceneElementSummary) =>
+  el.label?.trim() || el.type;
+
+/**
+ * Canvas selection -> chat references.
+ *
+ * Mirrors how an editor selection becomes a reference in a coding agent: what
+ * you have selected on the canvas is what "this"/"these" means in your next
+ * message. Pills track the live selection; dismissing one drops it until that
+ * element is selected again.
+ */
+const useSelectionReferences = (
+  excalidrawAPI: ReturnType<typeof useExcalidrawAPI>,
+) => {
+  const selectedElementIds = useExcalidrawStateValue("selectedElementIds");
+  const [dismissed, setDismissed] = useState<string[]>([]);
+
+  const selectedIds = useMemo(
+    () => Object.keys(selectedElementIds ?? {}),
+    [selectedElementIds],
+  );
+
+  // Forget dismissals for elements that are no longer selected, so reselecting
+  // an element brings its pill back rather than silently staying hidden.
+  useEffect(() => {
+    setDismissed((current) => {
+      const next = current.filter((id) => selectedIds.includes(id));
+      return next.length === current.length ? current : next;
+    });
+  }, [selectedIds]);
+
+  const references = useMemo(() => {
+    if (!excalidrawAPI || selectedIds.length === 0) {
+      return [];
+    }
+    const wanted = new Set(selectedIds.filter((id) => !dismissed.includes(id)));
+    return get_scene(excalidrawAPI).filter((el) => wanted.has(el.id));
+  }, [excalidrawAPI, selectedIds, dismissed]);
+
+  const dismiss = useCallback((id: string) => {
+    setDismissed((current) =>
+      current.includes(id) ? current : [...current, id],
+    );
+  }, []);
+
+  const clear = useCallback(() => setDismissed([]), []);
+
+  return { references, dismiss, clear };
+};
+
+/** Chrome's built-in speech recognition, if this browser has it. */
+const getSpeechRecognition = (): any =>
+  typeof window === "undefined"
+    ? undefined
+    : (window as any).SpeechRecognition ??
+      (window as any).webkitSpeechRecognition;
+
 export const AIChatSidebar = () => {
   const excalidrawAPI = useExcalidrawAPI();
 
   const [entries, setEntries] = useState<ChatEntry[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [listening, setListening] = useState(false);
+
+  const { references, dismiss, clear } = useSelectionReferences(excalidrawAPI);
 
   // The full conversation in the backend's format. Kept in a ref because the
   // agent loop mutates it across several awaits within a single send.
   const history = useRef<AgentMessage[]>([]);
   const transcriptRef = useRef<HTMLDivElement>(null);
+  const recognitionRef = useRef<any>(null);
+
+  const speechSupported = useMemo(() => Boolean(getSpeechRecognition()), []);
 
   const append = useCallback((entry: ChatEntry) => {
     setEntries((current) => [...current, entry]);
@@ -62,14 +132,68 @@ export const AIChatSidebar = () => {
     });
   }, [entries]);
 
+  // Stop the microphone if the sidebar goes away mid-dictation.
+  useEffect(
+    () => () => {
+      recognitionRef.current?.abort?.();
+    },
+    [],
+  );
+
+  const toggleDictation = useCallback(() => {
+    if (listening) {
+      recognitionRef.current?.stop?.();
+      return;
+    }
+
+    const Recognition = getSpeechRecognition();
+    if (!Recognition) {
+      return;
+    }
+
+    const recognition = new Recognition();
+    recognition.lang = navigator.language || "en-US";
+    recognition.interimResults = true;
+    recognition.continuous = false;
+
+    // Dictation appends to whatever is already typed rather than replacing it.
+    const base = input.trim() ? `${input.trim()} ` : "";
+
+    recognition.onresult = (event: any) => {
+      let transcript = "";
+      for (let i = 0; i < event.results.length; i++) {
+        transcript += event.results[i][0].transcript;
+      }
+      setInput(base + transcript);
+    };
+    recognition.onerror = () => setListening(false);
+    recognition.onend = () => setListening(false);
+
+    recognitionRef.current = recognition;
+    recognition.start();
+    setListening(true);
+  }, [input, listening]);
+
   const send = useCallback(async () => {
     const text = input.trim();
     if (!text || busy || !excalidrawAPI) {
       return;
     }
 
+    recognitionRef.current?.stop?.();
+
+    // Snapshot the pills now — the canvas selection changes as the agent draws.
+    const attached = references;
+
     setInput("");
-    append({ kind: "user", text });
+    append({
+      kind: "user",
+      text: attached.length
+        ? `${text}\n↳ referring to ${attached
+            .map(describeReference)
+            .join(", ")}`
+        : text,
+    });
     setBusy(true);
 
     try {
@@ -85,7 +209,12 @@ export const AIChatSidebar = () => {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             messages: history.current,
-            ...(turn === 0 ? { scene } : {}),
+            ...(turn === 0
+              ? {
+                  scene,
+                  ...(attached.length ? { references: attached } : {}),
+                }
+              : {}),
           }),
         });
 
@@ -143,8 +272,9 @@ export const AIChatSidebar = () => {
       });
     } finally {
       setBusy(false);
+      clear();
     }
-  }, [append, busy, excalidrawAPI, input]);
+  }, [append, busy, clear, excalidrawAPI, input, references]);
 
   return (
     <Sidebar name={AI_SIDEBAR_NAME} docked>
@@ -169,6 +299,10 @@ export const AIChatSidebar = () => {
                 draw a 3-tier architecture with a load balancer, two app
                 servers, and a database
               </button>
+              <p className="ai-chat__hint">
+                Tip: select shapes on the canvas and they become references for
+                your next message — then just say “make this blue”.
+              </p>
             </div>
           )}
 
@@ -195,11 +329,36 @@ export const AIChatSidebar = () => {
             void send();
           }}
         >
+          {references.length > 0 && (
+            <div className="ai-chat__refs" aria-label="Referenced elements">
+              {references.map((el) => (
+                <span key={el.id} className="ai-chat__ref" title={el.id}>
+                  <span className="ai-chat__ref-kind">{el.type}</span>
+                  <span className="ai-chat__ref-label">
+                    {describeReference(el)}
+                  </span>
+                  <button
+                    type="button"
+                    className="ai-chat__ref-remove"
+                    aria-label={`Remove ${describeReference(el)} reference`}
+                    onClick={() => dismiss(el.id)}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+
           <textarea
             className="ai-chat__input"
             value={input}
             rows={3}
-            placeholder="e.g. now add a cache next to the database"
+            placeholder={
+              references.length
+                ? "e.g. make this blue"
+                : "e.g. now add a cache next to the database"
+            }
             disabled={busy}
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={(event) => {
@@ -209,18 +368,53 @@ export const AIChatSidebar = () => {
               }
             }}
           />
-          <button
-            type="submit"
-            className="ai-chat__send"
-            disabled={busy || !input.trim()}
-          >
-            {busy ? "Drawing…" : "Send"}
-          </button>
+
+          <div className="ai-chat__actions">
+            <button
+              type="submit"
+              className="ai-chat__send"
+              disabled={busy || !input.trim()}
+            >
+              {busy ? "Drawing…" : "Send"}
+            </button>
+            {speechSupported && (
+              <button
+                type="button"
+                className={`ai-chat__mic${
+                  listening ? " ai-chat__mic--on" : ""
+                }`}
+                disabled={busy}
+                aria-pressed={listening}
+                title={listening ? "Stop dictation" : "Dictate a message"}
+                onClick={toggleDictation}
+              >
+                <MicIcon />
+              </button>
+            )}
+          </div>
         </form>
       </div>
     </Sidebar>
   );
 };
+
+const MicIcon = () => (
+  <svg
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" />
+    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+    <line x1="12" y1="19" x2="12" y2="22" />
+  </svg>
+);
 
 /**
  * Opens the sidebar. Rendered inside the editor's top-right cluster, next to the
@@ -256,6 +450,8 @@ const describeCall = (name: string, input: any): string => {
       return `added text “${input.text}” at (${input.x}, ${input.y})`;
     case "bind_arrow":
       return "connected two elements with an arrow";
+    case "set_style":
+      return `restyled ${input.ids?.length ?? 0} element(s)`;
     case "remove_element":
       return "removed an element";
     default:
