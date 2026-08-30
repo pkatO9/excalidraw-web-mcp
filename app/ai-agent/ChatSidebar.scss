@@ -143,6 +143,13 @@
     display: flex;
     flex-wrap: wrap;
     gap: 0.25rem;
+
+    // Expanding a large selection must not push the composer off screen, so the
+    // expanded list scrolls rather than growing without bound.
+    &--expanded {
+      max-height: 7.5rem;
+      overflow-y: auto;
+    }
   }
 
   &__ref {
@@ -173,6 +180,20 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     max-width: 10rem;
+  }
+
+  // The "+N" / "Show less" chip. Shares the pill shape but reads as an action.
+  &__ref--more {
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.7rem;
+    padding: 0.15rem 0.5rem;
+    background: transparent;
+    border-style: dashed;
+
+    &:hover {
+      background: var(--color-primary-light);
+    }
   }
 
   &__ref-remove {

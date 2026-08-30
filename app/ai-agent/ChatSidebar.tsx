@@ -19,6 +19,16 @@ const API_BASE =
 /** Hard stop so a confused model cannot spin forever against the canvas. */
 const MAX_TURNS = 12;
 
+/**
+ * How many reference pills to show before collapsing behind a "+N" chip.
+ * Selecting everything on a busy canvas otherwise buries the composer under
+ * thirty pills. All of them are still sent — this only bounds what is drawn.
+ */
+const COLLAPSED_REFERENCE_COUNT = 4;
+
+/** Labels echoed into the transcript before it summarises the rest. */
+const ECHOED_REFERENCE_COUNT = 3;
+
 /** Message shape the backend speaks (see server/src/index.js). */
 type AgentMessage =
   | { role: "user"; content: string }
@@ -44,6 +54,16 @@ type ChatEntry =
   | { kind: "assistant"; text: string }
   | { kind: "tool"; text: string; failed: boolean }
   | { kind: "error"; text: string };
+
+/**
+ * Short echo of what a message referred to. Selecting a whole diagram would
+ * otherwise print thirty labels into the transcript.
+ */
+const summariseReferences = (refs: SceneElementSummary[]) => {
+  const shown = refs.slice(0, ECHOED_REFERENCE_COUNT).map(describeReference);
+  const rest = refs.length - shown.length;
+  return rest > 0 ? `${shown.join(", ")} and ${rest} more` : shown.join(", ");
+};
 
 /** Human-readable name for a referenced element, for the pill. */
 const describeReference = (el: SceneElementSummary) =>
@@ -188,6 +208,7 @@ export const AIChatSidebar = () => {
   const [listening, setListening] = useState(false);
 
   const { references, dismiss, clear } = useSelectionReferences(excalidrawAPI);
+  const [referencesExpanded, setReferencesExpanded] = useState(false);
   const { onResizeStart, resetWidth } = useResizableSidebar();
 
   // The full conversation in the backend's format. Kept in a ref because the
@@ -266,9 +287,7 @@ export const AIChatSidebar = () => {
     append({
       kind: "user",
       text: attached.length
-        ? `${text}\n↳ referring to ${attached
-            .map(describeReference)
-            .join(", ")}`
+        ? `${text}\n↳ referring to ${summariseReferences(attached)}`
         : text,
     });
     setBusy(true);
@@ -350,6 +369,7 @@ export const AIChatSidebar = () => {
     } finally {
       setBusy(false);
       clear();
+      setReferencesExpanded(false);
     }
   }, [append, busy, clear, excalidrawAPI, input, references]);
 
@@ -417,8 +437,16 @@ export const AIChatSidebar = () => {
           }}
         >
           {references.length > 0 && (
-            <div className="ai-chat__refs" aria-label="Referenced elements">
-              {references.map((el) => (
+            <div
+              className={`ai-chat__refs${
+                referencesExpanded ? " ai-chat__refs--expanded" : ""
+              }`}
+              aria-label={`${references.length} referenced element(s)`}
+            >
+              {(referencesExpanded
+                ? references
+                : references.slice(0, COLLAPSED_REFERENCE_COUNT)
+              ).map((el) => (
                 <span key={el.id} className="ai-chat__ref" title={el.id}>
                   <span className="ai-chat__ref-kind">{el.type}</span>
                   <span className="ai-chat__ref-label">
@@ -434,6 +462,24 @@ export const AIChatSidebar = () => {
                   </button>
                 </span>
               ))}
+
+              {references.length > COLLAPSED_REFERENCE_COUNT && (
+                <button
+                  type="button"
+                  className="ai-chat__ref ai-chat__ref--more"
+                  aria-expanded={referencesExpanded}
+                  title={
+                    referencesExpanded
+                      ? "Show fewer"
+                      : "Show all referenced elements"
+                  }
+                  onClick={() => setReferencesExpanded((open) => !open)}
+                >
+                  {referencesExpanded
+                    ? "Show less"
+                    : `+${references.length - COLLAPSED_REFERENCE_COUNT}`}
+                </button>
+              )}
             </div>
           )}
 

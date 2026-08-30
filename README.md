@@ -137,7 +137,10 @@ elements are sent alongside the message, so demonstratives resolve to real ids:
 | Load Balancer + Database | "connect these" | `bind_arrow(lb, db)`, in the order listed |
 
 Pills track the live selection and each has an `×` to drop it; deselecting and
-reselecting brings it back. They are snapshotted at send time, so they stay correct
+reselecting brings it back. A large selection collapses to the first few pills behind a
+`+N` chip — select-all on a busy canvas would otherwise bury the composer under thirty
+of them. Collapsing is purely visual: **every** selected element is still sent as a
+reference, and the transcript echo summarises as "A, B, C and 27 more". They are snapshotted at send time, so they stay correct
 while the agent redraws the canvas. The system prompt tells the model to resolve
 "this"/"these"/"it" to those ids and never to guess from labels.
 

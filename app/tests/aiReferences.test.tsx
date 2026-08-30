@@ -109,6 +109,60 @@ describe("canvas selection becomes a chat reference", () => {
     expect(pills()).toEqual(["Cache"]);
   });
 
+  it("collapses a big selection behind a +N chip, and expands on click", async () => {
+    const ids = Array.from({ length: 10 }, (_, i) =>
+      add_rectangle(api, {
+        x: i * 400,
+        y: 0,
+        width: 180,
+        height: 80,
+        label: `Box ${i}`,
+      }),
+    ).map((box) => box.id);
+
+    await select(...ids);
+
+    // only the first few are drawn, the rest hide behind the chip
+    expect(pills()).toHaveLength(4);
+    const more = container.querySelector<HTMLButtonElement>(
+      ".ai-chat__ref--more",
+    );
+    expect(more).not.toBeNull();
+    expect(more!.textContent).toBe("+6");
+
+    // ...but the container still reports the full selection, which is what is
+    // actually sent with the message
+    expect(
+      container.querySelector(".ai-chat__refs")!.getAttribute("aria-label"),
+    ).toBe("10 referenced element(s)");
+
+    await act(async () => {
+      fireEvent.click(more!);
+    });
+
+    expect(pills()).toHaveLength(10);
+    expect(container.querySelector(".ai-chat__ref--more")!.textContent).toBe(
+      "Show less",
+    );
+  });
+
+  it("shows no +N chip when the selection already fits", async () => {
+    const ids = Array.from({ length: 3 }, (_, i) =>
+      add_rectangle(api, {
+        x: i * 400,
+        y: 0,
+        width: 180,
+        height: 80,
+        label: `Box ${i}`,
+      }),
+    ).map((box) => box.id);
+
+    await select(...ids);
+
+    expect(pills()).toHaveLength(3);
+    expect(container.querySelector(".ai-chat__ref--more")).toBeNull();
+  });
+
   it("clears pills when the canvas selection is cleared", async () => {
     const box = add_rectangle(api, {
       x: 0,
