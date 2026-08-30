@@ -1,0 +1,11 @@
+# Upstream Excalidraw is cloned by setup.sh, not vendored here.
+excalidraw/
+
+node_modules/
+.env
+*.log
+
+.DS_Store
+
+# scratch file from the IDE, not part of the project
+om.txt

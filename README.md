@@ -1,0 +1,303 @@
+# Excalidraw AI Diagramming Agent (WebMCP-style MVP)
+
+A forked [Excalidraw](https://github.com/excalidraw/excalidraw) with a chat sidebar.
+You type *"draw a 3-tier architecture with a load balancer, two app servers, and a
+database"* and the shapes appear on the live canvas — correctly positioned and
+connected with natively-bound arrows.
+
+The point of this approach over a browser-clicking agent is **exact, non-guessed
+positioning**: the model is handed the real scene JSON every turn and told to derive
+coordinates arithmetically from the elements that already exist.
+
+```
+┌─────────────────────────────┐        ┌──────────────────────┐
+│ Browser (forked Excalidraw) │        │ Node backend (:8787) │
+│                             │        │                      │
+│  ChatSidebar ──────────────────POST /api/chat──────────────► │
+│       │                     │        │   ├─ Azure OpenAI    │
+│       │  ◄──── tool_calls ──────────────┤   └─ Anthropic     │
+│       ▼                     │        │                      │
+│  toolLayer.ts               │        │  (holds the API key) │
+│   └─ excalidrawAPI ─► canvas│        └──────────────────────┘
+└─────────────────────────────┘
+```
+
+## Repository layout
+
+Upstream Excalidraw is **not vendored** here — `setup.sh` clones it and copies our
+additions in. That keeps this repo small and keeps the diff that actually belongs to
+this project visible.
+
+```
+app/ai-agent/     toolLayer.ts + ChatSidebar.tsx/.scss  (the fork's additions)
+app/tests/        unit + end-to-end tests
+server/           the chat-to-tool-call backend
+setup.sh          clones Excalidraw and wires the sidebar into App.tsx
+excalidraw/       created by setup.sh — gitignored
+```
+
+## Setup
+
+Requires Node >= 20, yarn 1.x, git and python3.
+
+```bash
+git clone https://github.com/<you>/excalidraw-web-mcp.git
+cd excalidraw-web-mcp
+./setup.sh                      # clones Excalidraw + applies our changes
+
+# 1. frontend (the forked editor)
+cd excalidraw && yarn install && yarn start     # http://localhost:3001
+
+# 2. backend (separate terminal)
+cd server && npm install
+cp .env.example .env            # fill in your provider credentials
+npm start                       # http://localhost:8787
+```
+
+`setup.sh` is idempotent — re-run it after editing anything in `app/` to push the
+change into the checkout.
+
+Then open the editor and click **Ask AI** (bottom-right) to open the chat sidebar.
+
+If you run the backend somewhere other than `localhost:8787`, point the frontend at
+it with `VITE_AGENT_API=https://... yarn start`.
+
+### Providers
+
+Both are implemented behind one interface (`server/src/providers/`). Pick the default
+with `LLM_PROVIDER` in `server/.env`; a request may also override it per call with
+`{"provider": "anthropic"}`.
+
+| Provider | Env | Notes |
+|---|---|---|
+| **Azure OpenAI** (production path) | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_DEPLOYMENT` | Default. Chat Completions + function calling. Verified against a `gpt-4.1` deployment. |
+| **Anthropic** | `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` | Messages API + `tool_use`. Implemented but **not live-tested** — no Anthropic key was available in this environment. |
+
+`GET /api/health` reports which providers are actually configured.
+
+## Tools implemented in this MVP
+
+All five run in the browser, in `excalidraw/excalidraw-app/ai-agent/toolLayer.ts`.
+Each function carries its exact Claude `tool_use` schema in a JSDoc block; the copy
+actually sent to the model lives in `server/src/toolSchemas.js`.
+
+| Tool | What it does |
+|---|---|
+| `get_scene()` | Returns every visible element as plain JSON — `id`, `type`, `x`, `y`, `width`, `height`, `label`, plus what each arrow is bound to. |
+| `add_rectangle(x, y, width, height, label)` | Labelled rectangle at exact coordinates. Returns the new id. |
+| `add_text(x, y, text)` | Standalone text element for titles and notes. |
+| `bind_arrow(source_id, target_id)` | Arrow between two existing elements using Excalidraw's **native binding**, so it snaps to shape edges and follows them when moved. |
+| `set_style(ids[], backgroundColor?, strokeColor?, fillStyle?)` | Recolours elements **already on the canvas**, in place. |
+| `remove_element(id)` | Deletes an element, its label, and any arrows bound to it. |
+
+`add_rectangle` also takes optional `backgroundColor` / `strokeColor` / `fillStyle`.
+
+**House style.** Every box is created with **rounded corners**
+(`roundness: ROUNDNESS.ADAPTIVE_RADIUS`) and a **`hachure`** fill — the single-line
+diagonal shading that keeps Excalidraw's hand-drawn character once a colour is applied.
+Both are set in the tool layer rather than left to the prompt, so they hold on every box
+regardless of what the model does. Passing an explicit `fillStyle` (`solid` /
+`cross-hatch`) still overrides it.
+
+### Colour is opt-in
+
+Diagrams render black-and-white unless the user asks for colour — the prompt forbids
+volunteering it. When colour *is* requested:
+
+- On an existing diagram the agent uses **`set_style`**, editing in place rather than
+  deleting and redrawing, so layout and arrow bindings survive.
+- Colours are assigned **by role, not per box** — every element playing the same part
+  gets the same pair, so two app servers in a tier always match. The palette is
+  Excalidraw's own, with light fills that stay readable behind the default dark label:
+
+  | Role | background | stroke |
+  |---|---|---|
+  | entry point / load balancer | `#a5d8ff` | `#1971c2` |
+  | compute / app server | `#b2f2bb` | `#2f9e44` |
+  | data store / database | `#ffec99` | `#f08c00` |
+  | cache / queue / broker | `#d0bfff` | `#6741d9` |
+  | external / client | `#ffc9c9` | `#e03131` |
+
+- `get_scene` reports colours **only for elements that have them**, so an uncoloured
+  diagram stays terse while a coloured one hands the model its palette to match when
+  adding new elements. A user-named colour always wins over the table.
+
+### Tools planned for next pass
+
+Explicitly **out of scope** here: diamond/ellipse shapes, freehand drawing, image
+elements, multi-select and grouping, undo/redo history control, collaboration and
+multiplayer rooms, fonts and stroke width/style, and persistence beyond Excalidraw's
+own local storage. (Colour was added after the first pass, on request.)
+
+## How positioning is kept exact
+
+1. **The scene is re-injected every user turn.** `ChatSidebar` calls `get_scene()`
+   before each request and the server prepends it to the user message, so the model
+   never works from a remembered layout. `get_scene` is *also* exposed as a tool so
+   it can re-read mid-turn after making changes.
+2. **The system prompt forbids invented coordinates** (`server/src/systemPrompt.js`).
+   It specifies default box size, minimum 40px clearance, the exact arithmetic for
+   left-to-right flow (`x = prev.x + prev.width + 80`), vertical tiers
+   (`y = above.y + above.height + 100`, centred), sibling spacing, and what user
+   wording like *"next to"* vs *"below"* means geometrically.
+3. **Arrows are never coordinate-guessed.** `bind_arrow` hands the two existing
+   elements plus an arrow skeleton to Excalidraw's own `convertToExcalidrawElements`
+   with `regenerateIds: false`, which runs the editor's real binding code
+   (`bindBindingElement`). The result has genuine `startBinding`/`endBinding` and both
+   shapes get the arrow added to their `boundElements`.
+
+## Research: how Excalidraw MCP servers build good diagrams
+
+Surveyed the existing Excalidraw MCP ecosystem before fixing arrow rendering. The
+consistent architectural principle across them:
+
+> MCP servers make Excalidraw diagrams a first-class data type for LLMs by handling
+> all **spatial reasoning — coordinate math, element bindings, text measurement and
+> overlap detection** — so the model works purely at the semantic level of nodes and
+> edges.
+
+Concrete learnings, and what this project does with each:
+
+| Learning from the ecosystem | Applied here |
+|---|---|
+| Modern Excalidraw binds with **`fixedPoint` + `mode: "orbit"`**, *not* the legacy `focus`/`gap`. A binding looks like `{ elementId, mode: "orbit", fixedPoint: [1.0, 0.5] }`. | Confirmed against the vendored source. `bind_arrow` now produces boundary `fixedPoint`s. |
+| Anchors must sit **on the shape boundary** so arrows meet edges based on relative position. | `edgeAnchor()` picks bottom/top/left/right from the dominant axis between centres. |
+| A **binding integrity engine** keeps arrow↔shape references bidirectional and repairs orphans after each mutation. | `convertToExcalidrawElements` maintains `boundElements` both ways; `remove_element` deletes arrows bound to a removed shape so nothing dangles. |
+| **Overlap detection** belongs in the tool layer, not the prompt. | `add_rectangle` returns a `warning` naming the elements it collides with, so the agent self-corrects. |
+| **Text measurement** (over-estimated ~15%) stops labels clipping. | Not adopted — Excalidraw measures bound text itself on the client, so the container grows natively. Noted as a next-pass item if labels ever clip. |
+| Some servers own layout entirely via a **graph layout algorithm** (the model supplies only structure). | Deliberately *not* adopted: this project's brief requires the model to compute positions arithmetically from `get_scene`. The tool layer owns pixel-accuracy (edges, bindings, overlap reporting); the model owns semantics and layout. |
+
+### The arrow bug this research fixed
+
+Arrows were drawn from one box's **centre** to the other's, skewering both shapes.
+The bindings were real — `startBinding`/`endBinding` had correct `elementId`s — but the
+geometry was wrong, because `fixedPoint` is derived from the endpoint you hand the
+binding code:
+
+```
+fixedPoint = [(px - box.x) / box.width, (py - box.y) / box.height]
+```
+
+Seeding the arrow centre-to-centre therefore recorded `[0.5, 0.5]` — literally "anchor
+at the centre". Seeding it between the two outlines yields `[0.5, 1]` (bottom centre)
+and `[0.5, 0]` (top centre) instead.
+
+A second, subtler bug surfaced while fixing it: Excalidraw computes an arrow's default
+points as `element.width || 100`, so a perfectly **vertical** arrow (width `0`, which is
+falsy) silently gained a 100px horizontal kink. `bind_arrow` now passes `points`
+explicitly.
+
+Both are covered by regression tests that assert on the actual geometry, not merely
+that a binding object exists — which is what let the original bug through.
+
+## Design decision: where the agent loop runs
+
+The tool layer *must* live in the frontend — `excalidrawAPI` is an in-memory handle on
+the mounted editor and cannot be reached from Node. So the backend needs a way to say
+"run this tool call" and get the result.
+
+The options were a socket/SSE channel, frontend polling of a queue, or making each
+HTTP request **one step** of the loop. This project does the last one: each
+`POST /api/chat` is a single model turn returning either final text or the tool calls
+to run; the browser executes them against `excalidrawAPI`, appends the results, and
+posts again.
+
+That means no sockets, no polling, and **no server-side session state** — the server
+is a pure function of the history it is handed, so it restarts cleanly and scales
+trivially. The API key never reaches the browser. The cost is one HTTP round trip per
+model turn, which is negligible next to model latency. Rationale is also recorded in
+the header comment of `server/src/index.js`.
+
+## Tests
+
+```bash
+cd excalidraw
+yarn vitest run excalidraw-app/tests/aiToolLayer.test.tsx   # 13 unit tests, no network
+yarn vitest run excalidraw-app/tests/aiAgent.e2e.test.tsx   # end-to-end, needs the backend
+```
+
+`aiToolLayer.test.tsx` mounts a real Excalidraw and exercises all five tools,
+including asserting that `bind_arrow` produces real bindings on both ends and that
+`remove_element` cleans up labels and dangling arrows.
+
+`aiAgent.e2e.test.tsx` asserts on live model output. It was initially flaky (1 failure
+in 6 runs — the model placed a "cache next to the database" in a new row *below* it
+instead of beside it). Two changes fixed that: `temperature: 0` on the Azure provider,
+since layout is rule-following rather than creative work, and hardening the wording
+rules in the system prompt from suggestions into explicit hard rules. It has passed
+every run since (4/4). `aiToolLayer.test.tsx` is fully deterministic and is the one to
+trust in CI.
+
+`aiAgent.e2e.test.tsx` runs the actual demo scenario against the live backend and
+model: it draws the 3-tier architecture, asserts every arrow is bound at both ends and
+that no two boxes overlap, then issues *"now add a cache next to the database"* and
+asserts the cache lands in the same row as the database and adjacent to it. It skips
+itself automatically if the backend is not running.
+
+## Assumptions made about Excalidraw's current API surface
+
+Checked against the cloned `master`, not the published docs — several of these differ
+from older versions.
+
+- **`excalidrawAPI` is obtained via the `useExcalidrawAPI()` hook**, available anywhere
+  under `<ExcalidrawAPIProvider>` (which `excalidraw-app` already mounts). The older
+  `ref`/`excalidrawAPI` prop still exists as `onExcalidrawAPI`.
+- **`updateScene({ elements, captureUpdate })`** is the supported write path.
+  `captureUpdate: CaptureUpdateAction.IMMEDIATELY` makes agent edits undoable, matching
+  what the app does for local changes. There is no `scrollToContent` on the current
+  API (it is now `setViewport`); the agent does not move the viewport.
+- **Mutations are built on `getSceneElementsIncludingDeleted()`** so tombstoned
+  elements are preserved; `get_scene` reports only `getSceneElements()` (live ones).
+- **A container's label is a separate `text` element** linked by `containerId`.
+  `get_scene` folds it into the container so the model sees one shape, and
+  `remove_element` deletes it alongside its container.
+- **`convertToExcalidrawElements(skeletons, { regenerateIds: false })`** preserves
+  caller-supplied ids. This is what makes `bind_arrow` able to bind to elements that
+  are *already* on the canvas rather than only to ones created in the same call.
+- **Deletion is a soft delete** (`isDeleted: true` via `newElementWith`), which is how
+  Excalidraw itself handles it for history and collaboration.
+- Styling is left at Excalidraw's defaults, per scope. Default box is 180×80.
+- The dev server binds **port 3001** here because 3000 was occupied.
+
+## Deploying the backend to Azure
+
+Not deployed as part of this MVP — the frontend runs locally, so the backend does too.
+When it is deployed it goes to Azure, per project constraint. The backend is a
+stateless Express app with no session state, so App Service is enough:
+
+```bash
+cd server
+az webapp up \
+  --name excalidraw-web-mcp-api \
+  --resource-group <your-resource-group> \
+  --runtime "NODE:20-lts" \
+  --sku B1
+
+az webapp config appsettings set \
+  --name excalidraw-web-mcp-api \
+  --resource-group <your-resource-group> \
+  --settings \
+    LLM_PROVIDER=azure \
+    AZURE_OPENAI_ENDPOINT="https://<your-resource>.openai.azure.com/" \
+    AZURE_OPENAI_DEPLOYMENT=gpt-4.1 \
+    AZURE_OPENAI_API_KEY="<key>"
+```
+
+Then run the frontend with `VITE_AGENT_API=https://excalidraw-web-mcp-api.azurewebsites.net`.
+For production, prefer a managed identity or Key Vault reference over a literal key,
+and restrict CORS to the frontend's origin (it is currently open).
+
+## Security notes
+
+- `server/.env` is gitignored and holds the only copy of the credentials.
+- The Claude / Azure OpenAI call happens server-side only; no key is ever shipped to
+  the browser.
+- CORS is wide open for local development — lock it down before deploying.
+
+## Attribution
+
+Built on [Excalidraw](https://github.com/excalidraw/excalidraw) (MIT, © 2020 Excalidraw).
+This repo contains only the agent additions; `setup.sh` clones upstream Excalidraw at
+build time rather than vendoring it.
+
+No `LICENSE` file is included yet — add one before treating this as reusable by others.
