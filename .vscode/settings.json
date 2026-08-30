@@ -1,0 +1,7 @@
+{
+  // excalidraw/ is a real nested git clone (created by setup.sh) that is
+  // intentionally gitignored in this repo's parent .gitignore. Without this,
+  // VSCode's Git extension auto-detects its .git folder and shows its own
+  // (unrelated) uncommitted-change decorations in the Explorer.
+  "git.ignoredRepositories": ["excalidraw"]
+}
