@@ -58,6 +58,92 @@ describe("AI agent tool layer", () => {
     });
   });
 
+  it("honours the requested position when it is free", () => {
+    const box = add_rectangle(api, {
+      x: 300,
+      y: 200,
+      width: 180,
+      height: 80,
+      label: "Free spot",
+    });
+    expect(box).toMatchObject({ x: 300, y: 200 });
+    expect((box as any).moved_from).toBeUndefined();
+  });
+
+  it("nudges a colliding box to the nearest free spot instead of overlapping", () => {
+    add_rectangle(api, {
+      x: 300,
+      y: 200,
+      width: 180,
+      height: 80,
+      label: "First",
+    });
+
+    // exactly on top of the first box
+    const second = add_rectangle(api, {
+      x: 300,
+      y: 200,
+      width: 180,
+      height: 80,
+      label: "Second",
+    });
+
+    expect((second as any).moved_from).toEqual({ x: 300, y: 200 });
+    expectNoOverlaps(get_scene(api));
+
+    // and it stays near where it was asked for rather than flying off
+    expect(Math.abs(second.x - 300)).toBeLessThan(400);
+    expect(Math.abs(second.y - 200)).toBeLessThan(400);
+  });
+
+  it("keeps a whole batch of boxes disjoint even when all are placed at one point", () => {
+    // Reproduces the real failure: the model emits a batch of add_rectangle
+    // calls in a single turn, so it cannot see any of them before choosing
+    // coordinates. The tool layer has to hold the invariant on its own.
+    const labels = ["A", "B", "C", "D", "E", "F", "G", "H"];
+    for (const label of labels) {
+      add_rectangle(api, {
+        x: 400,
+        y: 300,
+        width: 180,
+        height: 80,
+        label,
+      });
+    }
+
+    const scene = get_scene(api);
+    expect(scene).toHaveLength(labels.length);
+    expectNoOverlaps(scene);
+  });
+
+  it("does not treat arrows as obstacles when placing", () => {
+    const a = add_rectangle(api, {
+      x: 0,
+      y: 0,
+      width: 180,
+      height: 80,
+      label: "A",
+    });
+    const b = add_rectangle(api, {
+      x: 0,
+      y: 400,
+      width: 180,
+      height: 80,
+      label: "B",
+    });
+    bind_arrow(api, { source_id: a.id, target_id: b.id });
+
+    // the gap between A and B is crossed by an arrow but is otherwise free
+    const c = add_rectangle(api, {
+      x: 400,
+      y: 200,
+      width: 180,
+      height: 80,
+      label: "C",
+    });
+    expect(c).toMatchObject({ x: 400, y: 200 });
+  });
+
   it("add_text adds a standalone text element", () => {
     const created = add_text(api, {
       x: 40,
@@ -394,3 +480,21 @@ describe("AI agent tool layer", () => {
     ).toBe(false);
   });
 });
+
+function expectNoOverlaps(boxes: ReturnType<typeof get_scene>) {
+  const shapes = boxes.filter((el) => el.type === "rectangle");
+  for (let i = 0; i < shapes.length; i++) {
+    for (let j = i + 1; j < shapes.length; j++) {
+      const a = shapes[i];
+      const b = shapes[j];
+      const collides =
+        a.x < b.x + b.width &&
+        b.x < a.x + a.width &&
+        a.y < b.y + b.height &&
+        b.y < a.y + a.height;
+      if (collides) {
+        throw new Error(`"${a.label}" overlaps "${b.label}"`);
+      }
+    }
+  }
+}

@@ -109,34 +109,90 @@ const commit = (
   });
 };
 
+/** Clear space required between two boxes, and the grid the search snaps to. */
+const PLACEMENT_GAP = 40;
+const PLACEMENT_STEP = 20;
+const PLACEMENT_MAX_RINGS = 60;
+
+type Box = { x: number; y: number; width: number; height: number };
+
 /**
- * Overlap check, reported back to the model as part of the tool result.
- *
- * Established practice for Excalidraw MCP servers is that the tool layer owns
- * the spatial reasoning (coordinate math, bindings, overlap detection) so the
- * model can work at the level of nodes and edges. We keep the model in charge
- * of layout per the project brief, but tell it plainly when a placement
- * collides so it can correct itself instead of shipping a broken diagram.
+ * Things a new box must not land on. Arrows and lines are excluded — they route
+ * between shapes, so treating them as obstacles would wall off the canvas.
  */
-const findOverlaps = (
-  api: ExcalidrawImperativeAPI,
-  box: { x: number; y: number; width: number; height: number },
-  ignoreIds: Set<string>,
-) =>
+const obstaclesFor = (api: ExcalidrawImperativeAPI, ignore: Set<string>) =>
   api
     .getSceneElements()
     .filter(
       (el) =>
-        !ignoreIds.has(el.id) &&
+        !ignore.has(el.id) &&
         el.type !== "arrow" &&
         el.type !== "line" &&
-        !(el.type === "text" && el.containerId) &&
-        box.x < el.x + el.width &&
-        el.x < box.x + box.width &&
-        box.y < el.y + el.height &&
-        el.y < box.y + box.height,
-    )
-    .map((el) => el.id);
+        !(el.type === "text" && el.containerId),
+    );
+
+const overlaps = (a: Box, b: Box, gap: number) =>
+  a.x < b.x + b.width + gap &&
+  b.x < a.x + a.width + gap &&
+  a.y < b.y + b.height + gap &&
+  b.y < a.y + a.height + gap;
+
+const hits = (box: Box, obstacles: readonly Box[]) =>
+  obstacles.filter((el) => overlaps(box, el, PLACEMENT_GAP));
+
+/**
+ * Find the closest free position to the one asked for.
+ *
+ * The model is good at expressing intent ("put the cache to the right of the
+ * database") and bad at collision-checking a canvas with thirty elements on it,
+ * especially since it issues a whole batch of add_rectangle calls at once and
+ * only sees the results afterwards. So the tool layer guarantees the invariant
+ * instead: the requested spot is honoured when it is free, and otherwise we
+ * search outward on a grid and take the nearest opening. The model's layout
+ * intent survives because we always prefer the smallest possible nudge.
+ */
+const findFreePosition = (
+  api: ExcalidrawImperativeAPI,
+  box: Box,
+  ignore: Set<string> = new Set(),
+): { x: number; y: number; movedFrom?: { x: number; y: number } } => {
+  const obstacles = obstaclesFor(api, ignore);
+
+  if (hits(box, obstacles).length === 0) {
+    return { x: box.x, y: box.y };
+  }
+
+  for (let ring = 1; ring <= PLACEMENT_MAX_RINGS; ring++) {
+    const span = ring * PLACEMENT_STEP;
+
+    const candidates: { x: number; y: number }[] = [];
+    for (let i = -ring; i <= ring; i++) {
+      const offset = i * PLACEMENT_STEP;
+      candidates.push({ x: box.x + offset, y: box.y + span });
+      candidates.push({ x: box.x + offset, y: box.y - span });
+      candidates.push({ x: box.x + span, y: box.y + offset });
+      candidates.push({ x: box.x - span, y: box.y + offset });
+    }
+
+    // Nearest first, so the box ends up as close to the requested spot as the
+    // canvas allows rather than at an arbitrary corner of the ring.
+    candidates.sort(
+      (a, b) =>
+        (a.x - box.x) ** 2 +
+        (a.y - box.y) ** 2 -
+        ((b.x - box.x) ** 2 + (b.y - box.y) ** 2),
+    );
+
+    for (const candidate of candidates) {
+      if (hits({ ...box, ...candidate }, obstacles).length === 0) {
+        return { ...candidate, movedFrom: { x: box.x, y: box.y } };
+      }
+    }
+  }
+
+  // Canvas is implausibly full; place where asked rather than failing the call.
+  return { x: box.x, y: box.y };
+};
 
 /** Drops undefined keys so we never overwrite a colour with `undefined`. */
 const pickStyle = (style: ElementStyle) => {
@@ -256,7 +312,16 @@ export const add_rectangle = (
     label?: string;
   } & ElementStyle,
 ) => {
-  const { x, y, width, height, label, ...style } = args;
+  const { width, height, label, ...style } = args;
+
+  // Resolve a non-overlapping position before creating anything, so the
+  // invariant holds even when the model fires a whole batch of adds at once.
+  const { x, y, movedFrom } = findFreePosition(api, {
+    x: args.x,
+    y: args.y,
+    width,
+    height,
+  });
 
   const created = convertToExcalidrawElements([
     {
@@ -276,11 +341,9 @@ export const add_rectangle = (
     } as ExcalidrawElementSkeleton,
   ]);
 
-  const createdIds = new Set(created.map((el) => el.id));
   commit(api, [...api.getSceneElementsIncludingDeleted(), ...created]);
 
   const container = created.find((el) => el.type === "rectangle")!;
-  const overlaps = findOverlaps(api, container, createdIds);
 
   return {
     id: container.id,
@@ -290,11 +353,16 @@ export const add_rectangle = (
     width: round(container.width),
     height: round(container.height),
     ...(label ? { label } : {}),
-    ...(overlaps.length
+    ...(movedFrom
       ? {
-          warning: `This box overlaps existing element(s): ${overlaps.join(
-            ", ",
-          )}. Move it so there is at least 40px of clear space, using remove_element then add_rectangle again.`,
+          moved_from: movedFrom,
+          note: `(${movedFrom.x}, ${
+            movedFrom.y
+          }) was already occupied, so the box was placed at (${round(
+            container.x,
+          )}, ${round(
+            container.y,
+          )}) — the nearest free spot. Use these coordinates when positioning anything relative to it.`,
         }
       : {}),
   };

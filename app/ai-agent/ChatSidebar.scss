@@ -1,9 +1,41 @@
 .ai-chat {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
   min-height: 0;
   font-size: 0.875rem;
+
+  // Grab strip on the panel's inner edge. Sits slightly outside the content so
+  // it lands on the island's padding rather than stealing clicks from the chat.
+  &__resizer {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -0.75rem;
+    width: 0.75rem;
+    cursor: col-resize;
+    touch-action: none;
+    z-index: 2;
+
+    &::after {
+      content: "";
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 3px;
+      height: 2.5rem;
+      border-radius: 999px;
+      background: var(--color-gray-40);
+      opacity: 0;
+      transition: opacity 120ms ease;
+    }
+
+    &:hover::after {
+      opacity: 1;
+    }
+  }
 
   &__title {
     font-weight: 600;

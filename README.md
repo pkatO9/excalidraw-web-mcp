@@ -99,6 +99,32 @@ Both are set in the tool layer rather than left to the prompt, so they hold on e
 regardless of what the model does. Passing an explicit `fillStyle` (`solid` /
 `cross-hatch`) still overrides it.
 
+## Overlap is prevented by the tool layer, not the prompt
+
+`add_rectangle` resolves a **non-overlapping position before creating anything**. If the
+requested spot is taken it searches outward on a 20px grid and takes the nearest opening
+(40px minimum clearance), then reports where the box actually landed.
+
+This has to live in the tool layer rather than the system prompt. The model issues a
+whole batch of `add_rectangle` calls in a single turn, so it cannot see any of them
+before choosing coordinates — asking it to collision-check a canvas with thirty elements
+is asking it to do the one thing it is worst at. Making the tool hold the invariant means
+it holds at any scale, deterministically. It matches what the MCP survey found: the tool
+layer owns spatial reasoning, the model owns semantics.
+
+Arrows and lines are excluded from collision checks — they route *between* shapes, so
+treating them as obstacles would wall off the canvas. The model is told to read x/y back
+out of the response, since a box may not be where it asked.
+
+## Resizing the panel
+
+Drag the panel's inner edge to widen it, or double-click that edge to reset. The width
+persists across reloads. It works by overriding `--right-sidebar-width` — the same
+variable the editor uses to reserve canvas space, so the panel and the canvas reflow
+together. The override is written as a stylesheet rule with `!important` rather than an
+inline style, because React owns the inline style on that container and would otherwise
+clobber it on the next render.
+
 ## Selecting shapes as chat references
 
 Select anything on the canvas and it appears as a **pill** above the chat input — the

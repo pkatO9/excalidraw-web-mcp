@@ -19,7 +19,7 @@ export const TOOL_SCHEMAS = [
   {
     name: "add_rectangle",
     description:
-      "Add a labelled rectangle at exact canvas coordinates. x/y are the top-left corner. Use this for every box in an architecture diagram (services, load balancers, databases, caches). Returns the new element's id, which you need in order to connect it with bind_arrow.",
+      "Add a labelled rectangle. x/y are the top-left corner. Use this for every box in an architecture diagram (services, load balancers, databases, caches). Collision is handled for you: if the spot you ask for is taken, the box is placed at the nearest free position instead and the response tells you where it actually landed — so boxes can never overlap. ALWAYS use the x/y in the response, not the ones you requested, when positioning anything relative to this box. Returns the new element's id, which you need for bind_arrow.",
     input_schema: {
       type: "object",
       properties: {
