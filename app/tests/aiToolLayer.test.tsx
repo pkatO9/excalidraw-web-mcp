@@ -8,6 +8,7 @@ import {
   add_rectangle,
   add_text,
   bind_arrow,
+  executeTool,
   get_scene,
   remove_element,
   set_style,
@@ -276,6 +277,40 @@ describe("AI agent tool layer", () => {
     expect(el.endBinding.fixedPoint[0]).toBeCloseTo(0, 2); // left edge of target
     expect(el.startBinding.fixedPoint[1]).toBeCloseTo(0.5, 1); // vertically centred
     expect(el.endBinding.fixedPoint[1]).toBeCloseTo(0.5, 1);
+  });
+
+  it("bind_arrow refuses to bind to another arrow, with a recoverable message", () => {
+    // Regression: passing an arrow id used to fault inside Excalidraw with
+    // "Cannot read properties of undefined (reading 'id')", which tells the
+    // agent nothing. Selecting an arrow and asking to re-point it hits this.
+    const a = add_rectangle(api, {
+      x: 0,
+      y: 0,
+      width: 180,
+      height: 80,
+      label: "External API",
+    });
+    const b = add_rectangle(api, {
+      x: 0,
+      y: 400,
+      width: 180,
+      height: 80,
+      label: "API Server",
+    });
+    const arrow = bind_arrow(api, { source_id: a.id, target_id: b.id });
+
+    for (const args of [
+      { source_id: arrow.id, target_id: a.id },
+      { source_id: a.id, target_id: arrow.id },
+    ]) {
+      const outcome = executeTool(api, "bind_arrow", args);
+      expect(outcome.ok).toBe(false);
+      const error = (outcome as { ok: false; error: string }).error;
+      expect(error).toMatch(/arrows can only connect shapes/);
+      // it must name the way out, not just refuse
+      expect(error).toMatch(/remove_element/);
+      expect(error).not.toMatch(/Cannot read properties/);
+    }
   });
 
   it("bind_arrow reports a usable error for an unknown id", () => {

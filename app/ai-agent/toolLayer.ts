@@ -224,6 +224,30 @@ const requireLiveElement = (
 };
 
 /**
+ * Arrows can only bind to shapes. Handing `bind_arrow` another arrow used to
+ * fault deep inside Excalidraw with "Cannot read properties of undefined",
+ * which tells the agent nothing it can act on — so reject it here with a
+ * message that names the actual recovery.
+ */
+const NON_BINDABLE = new Set(["arrow", "line", "freedraw"]);
+
+const requireBindableElement = (
+  api: ExcalidrawImperativeAPI,
+  id: string,
+  role: string,
+): ExcalidrawElement => {
+  const el = requireLiveElement(api, id, role);
+  if (NON_BINDABLE.has(el.type)) {
+    throw new Error(
+      `${role} "${id}" is ${
+        el.type === "arrow" ? "an arrow" : `a ${el.type}`
+      }, and arrows can only connect shapes — not other arrows or lines. To change where an existing arrow points, delete it with remove_element and draw a new one with bind_arrow between the two shapes you want.`,
+    );
+  }
+  return el;
+};
+
+/**
  * ```json
  * {
  *   "name": "get_scene",
@@ -441,8 +465,8 @@ export const bind_arrow = (
     throw new Error("source_id and target_id must be different elements.");
   }
 
-  const source = requireLiveElement(api, source_id, "source_id");
-  const target = requireLiveElement(api, target_id, "target_id");
+  const source = requireBindableElement(api, source_id, "source_id");
+  const target = requireBindableElement(api, target_id, "target_id");
 
   // Seed the arrow between the two shapes' EDGES, not their centres. The binding
   // code derives each fixedPoint from the endpoint we hand it, so seeding at the
