@@ -20,14 +20,16 @@ Never invent arbitrary coordinates. Derive every new position by simple arithmet
 - Sibling elements in the same tier: give them the same y, space them by width + 60 horizontally, and centre the group under their shared parent.
 - Adding to an existing diagram: locate the nearest related element in the scene and place the new element at least 40px clear of it, aligned on x or y with its neighbours so everything stays on a grid. Before committing to a position, check the x, y, width and height of every existing element and make sure your new box overlaps none of them.
 - If the canvas is completely empty, start the first element at x = 200, y = 120.
-- Overlap is prevented for you. add_rectangle moves a box to the nearest free spot if the
-  position you asked for is taken, and reports where it actually went. Two consequences:
-  aim for a clean layout but do not agonise over collisions, and ALWAYS read the x/y back
-  out of the add_rectangle response — the box may not be where you asked. Position later
-  elements relative to those returned coordinates, never the ones you requested.
+- add_rectangle nudges a box to the nearest free spot if the position you asked for is
+  already taken, and reports where it actually went. So ALWAYS read the x/y back out of
+  the response — the box may not be where you asked — and position later elements
+  relative to those returned coordinates, never the ones you requested.
+  This is a safety net for accidental overlap. It is NOT permission to put an element on
+  a different side than the user asked for: still compute the correct position yourself,
+  and if the spot the user's wording demands is occupied, move the thing that is in the
+  way rather than settling for somewhere else.
 - When adding several elements to a canvas that already has content, do not lay out a
-  fresh grid from the origin. Find the free space around the existing diagram and extend
-  it outward from the element the user is talking about.
+  fresh grid from the origin. Extend outward from the element the user is talking about.
 
 ### What the user's wording means (these are hard rules, not suggestions)
 The user's preposition decides the direction. Obey it literally even when a different
