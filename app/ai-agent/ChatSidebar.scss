@@ -6,34 +6,48 @@
   min-height: 0;
   font-size: 0.875rem;
 
-  // Grab strip on the panel's inner edge. Sits slightly outside the content so
-  // it lands on the island's padding rather than stealing clicks from the chat.
+  // Grab strip on the panel's inner edge.
+  //
+  // The hit area straddles the edge and is deliberately much wider than the
+  // grip you can see (24px vs 4px) — a hairline target is fiddly to land on
+  // with a mouse. The grip itself stays faintly visible at rest so there is
+  // something to aim at, rather than only appearing once you already found it.
   &__resizer {
     position: absolute;
     top: 0;
     bottom: 0;
-    left: -0.75rem;
-    width: 0.75rem;
+    left: -1.25rem;
+    width: 1.5rem;
     cursor: col-resize;
     touch-action: none;
     z-index: 2;
 
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
     &::after {
       content: "";
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      width: 3px;
-      height: 2.5rem;
+      width: 4px;
+      height: 3rem;
       border-radius: 999px;
       background: var(--color-gray-40);
-      opacity: 0;
-      transition: opacity 120ms ease;
+      opacity: 0.4;
+      transition: opacity 120ms ease, background-color 120ms ease,
+        height 120ms ease;
     }
 
     &:hover::after {
       opacity: 1;
+      height: 4rem;
+      background: var(--color-primary);
+    }
+
+    &:active::after {
+      opacity: 1;
+      height: 100%;
+      border-radius: 0;
+      background: var(--color-primary);
     }
   }
 
