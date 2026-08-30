@@ -63,6 +63,13 @@
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
+
+    // The editor sets `user-select: none` on .excalidraw so dragging on the
+    // canvas never selects UI text. That is right for the canvas and wrong for
+    // a chat log you want to copy out of, so opt back in here — the same way
+    // upstream does for its error splash. Buttons keep the editor's default.
+    user-select: text;
+    cursor: auto;
   }
 
   &__empty {
@@ -265,6 +272,7 @@
   &__input {
     font: inherit;
     resize: none;
+    user-select: text;
     width: 100%;
     box-sizing: border-box;
     padding: 0.5rem;
