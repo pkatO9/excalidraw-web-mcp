@@ -114,19 +114,39 @@
     }
   }
 
+  // Sits in the editor's top-right cluster alongside Excalidraw+ and share.
+  // Metrics are copied from .collab-button so the row lines up exactly.
   &__toggle {
-    position: fixed;
-    right: 1rem;
-    bottom: 1.5rem;
-    z-index: 5;
-    font: inherit;
+    flex-shrink: 0;
+    height: var(--lg-button-size);
+    min-width: var(--lg-button-size);
+    padding: 0 0.75rem;
+
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    font-family: inherit;
+    font-size: 0.875rem;
     font-weight: 600;
+    letter-spacing: 0.02em;
+    line-height: 1;
     cursor: pointer;
-    padding: 0.625rem 1rem;
-    border: none;
-    border-radius: 999px;
-    background: var(--color-primary);
-    color: #fff;
-    box-shadow: var(--shadow-island);
+
+    background-color: var(--color-primary);
+    color: var(--color-surface-lowest);
+    border: 1px solid var(--color-primary);
+    border-radius: var(--border-radius-lg);
+    box-shadow: 0 0 0 1px var(--color-surface-lowest);
+
+    &:hover {
+      background-color: var(--color-primary-darker);
+      border-color: var(--color-primary-darker);
+    }
+
+    &:active {
+      background-color: var(--color-primary-darkest);
+      border-color: var(--color-primary-darkest);
+    }
   }
 }

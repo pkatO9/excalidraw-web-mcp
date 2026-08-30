@@ -222,7 +222,11 @@ export const AIChatSidebar = () => {
   );
 };
 
-/** Floating button that opens the sidebar. Rendered outside <Excalidraw>. */
+/**
+ * Opens the sidebar. Rendered inside the editor's top-right cluster, next to the
+ * Excalidraw+ and share buttons, and deliberately styled to match them rather
+ * than floating over the canvas.
+ */
 export const AIChatToggle = () => {
   const excalidrawAPI = useExcalidrawAPI();
 
@@ -237,7 +241,7 @@ export const AIChatToggle = () => {
       title="Open the AI diagram agent"
       onClick={() => excalidrawAPI.toggleSidebar({ name: AI_SIDEBAR_NAME })}
     >
-      Ask AI
+      AI
     </button>
   );
 };

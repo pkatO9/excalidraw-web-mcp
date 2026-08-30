@@ -53,13 +53,80 @@ old_tail = """      </Excalidraw>
 };"""
 new_tail = """        <AIChatSidebar />
       </Excalidraw>
-      <AIChatToggle />
     </div>
   );
 };"""
 if source.count(old_tail) != 1:
     sys.exit("    !! could not find the <Excalidraw> closing tag; upstream may have changed")
 source = source.replace(old_tail, new_tail, 1)
+
+# The AI trigger lives in the editor's top-right cluster next to Excalidraw+ and
+# share. Upstream returns null there when collab is unconfigured, which would
+# hide our button on a plain local checkout, so the guard is narrowed to mobile.
+old_top = """        renderTopRightUI={(isMobile) => {
+          if (isMobile || !collabAPI || isCollabDisabled) {
+            return null;
+          }
+
+          return (
+            <div className="excalidraw-ui-top-right">
+              {excalidrawAPI?.getEditorInterface().formFactor === "desktop" && (
+                <ExcalidrawPlusPromoBanner
+                  isSignedIn={isExcalidrawPlusSignedUser}
+                />
+              )}
+
+              {collabError.message && <CollabError collabError={collabError} />}
+              <LiveCollaborationTrigger
+                isCollaborating={isCollaborating}
+                onSelect={() =>
+                  setShareDialogState({ isOpen: true, type: "share" })
+                }
+                editorInterface={editorInterface}
+              />
+            </div>
+          );
+        }}"""
+new_top = """        renderTopRightUI={(isMobile) => {
+          if (isMobile) {
+            return null;
+          }
+
+          // Collaboration UI is conditional, but the AI trigger is not — it must
+          // still appear when collab is unconfigured, which is the default for a
+          // local checkout.
+          const showCollabUI = Boolean(collabAPI) && !isCollabDisabled;
+
+          return (
+            <div className="excalidraw-ui-top-right">
+              {showCollabUI &&
+                excalidrawAPI?.getEditorInterface().formFactor ===
+                  "desktop" && (
+                  <ExcalidrawPlusPromoBanner
+                    isSignedIn={isExcalidrawPlusSignedUser}
+                  />
+                )}
+
+              <AIChatToggle />
+
+              {showCollabUI && collabError.message && (
+                <CollabError collabError={collabError} />
+              )}
+              {showCollabUI && (
+                <LiveCollaborationTrigger
+                  isCollaborating={isCollaborating}
+                  onSelect={() =>
+                    setShareDialogState({ isOpen: true, type: "share" })
+                  }
+                  editorInterface={editorInterface}
+                />
+              )}
+            </div>
+          );
+        }}"""
+if source.count(old_top) != 1:
+    sys.exit("    !! could not find renderTopRightUI in App.tsx; upstream may have changed")
+source = source.replace(old_top, new_top, 1)
 
 path.write_text(source)
 print("    App.tsx wired")
@@ -77,5 +144,5 @@ Setup complete. Next:
        cp .env.example .env      # add your provider credentials
        npm start
 
-  Then open the editor and click "Ask AI" (bottom right).
+  Then open the editor and click the "AI" button, top right, next to Excalidraw+ and share.
 DONE

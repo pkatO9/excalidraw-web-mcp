@@ -57,7 +57,7 @@ npm start                       # http://localhost:8787
 `setup.sh` is idempotent — re-run it after editing anything in `app/` to push the
 change into the checkout.
 
-Then open the editor and click **Ask AI** (bottom-right) to open the chat sidebar.
+Then open the editor and click the **AI** button, top-right, next to Excalidraw+ and share, to open the chat sidebar.
 
 If you run the backend somewhere other than `localhost:8787`, point the frontend at
 it with `VITE_AGENT_API=https://... yarn start`.
@@ -213,10 +213,11 @@ the header comment of `server/src/index.js`.
 ```bash
 cd excalidraw
 yarn vitest run excalidraw-app/tests/aiToolLayer.test.tsx   # 13 unit tests, no network
+yarn vitest run excalidraw-app/tests/aiChatToggle.test.tsx  # 1 render test, no network
 yarn vitest run excalidraw-app/tests/aiAgent.e2e.test.tsx   # end-to-end, needs the backend
 ```
 
-`aiToolLayer.test.tsx` mounts a real Excalidraw and exercises all five tools,
+`aiToolLayer.test.tsx` mounts a real Excalidraw and exercises all six tools,
 including asserting that `bind_arrow` produces real bindings on both ends and that
 `remove_element` cleans up labels and dangling arrows.
 
