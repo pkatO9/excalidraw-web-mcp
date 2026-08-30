@@ -124,7 +124,7 @@ export const TOOL_SCHEMAS = [
   {
     name: "remove_element",
     description:
-      "Delete an element by id. Also removes that element's label and any arrows bound to it, so no dangling arrows are left behind. Use this to correct a mistake.",
+      "Delete an element by id. Deleting a shape also removes its label and any arrows bound to it, so those arrows disappear automatically — do NOT also call remove_element for them. When the user asks to delete several elements, issue one call per shape and leave the connecting arrows out. Calling it for something that has already gone is a harmless no-op. Use this to correct a mistake.",
     input_schema: {
       type: "object",
       properties: {

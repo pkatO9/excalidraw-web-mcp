@@ -307,6 +307,45 @@ describe("AI agent tool layer", () => {
     });
   });
 
+  it("deleting an already-cascaded arrow is a no-op, not an error", () => {
+    // Regression: deleting a multi-selection of shapes AND the arrows between
+    // them used to fail on the arrows, because deleting a shape already takes
+    // its bound arrows with it. The end state was right but it reported errors.
+    const a = add_rectangle(api, {
+      x: 0,
+      y: 0,
+      width: 180,
+      height: 80,
+      label: "Load Balancer",
+    });
+    const b = add_rectangle(api, {
+      x: 400,
+      y: 0,
+      width: 180,
+      height: 80,
+      label: "App Server",
+    });
+    const arrow = bind_arrow(api, { source_id: a.id, target_id: b.id });
+
+    // deleting the shape cascades to the arrow
+    const first = remove_element(api, { id: a.id });
+    expect(first.removed_ids).toContain(arrow.id);
+
+    // and deleting that same arrow afterwards is a harmless no-op
+    const second = remove_element(api, { id: arrow.id });
+    expect(second.already_removed).toBe(true);
+    expect(second.removed_ids).toEqual([]);
+
+    // an id that never existed is still a real error
+    expect(() => remove_element(api, { id: "never-existed" })).toThrow(
+      /does not exist/,
+    );
+
+    // end state: only the untouched box survives
+    const scene = get_scene(api);
+    expect(scene.map((el) => el.id)).toEqual([b.id]);
+  });
+
   it("set_style rejects unknown ids and empty patches", () => {
     const a = add_rectangle(api, {
       x: 0,

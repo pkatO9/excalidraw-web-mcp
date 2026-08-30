@@ -239,7 +239,7 @@ export const AIChatSidebar = () => {
             append({
               kind: "tool",
               text: outcome.ok
-                ? describeCall(call.name, call.input)
+                ? describeCall(call.name, call.input, outcome.result)
                 : `${call.name} failed: ${outcome.error}`,
               failed: !outcome.ok,
             });
@@ -440,7 +440,7 @@ export const AIChatToggle = () => {
   );
 };
 
-const describeCall = (name: string, input: any): string => {
+const describeCall = (name: string, input: any, result?: any): string => {
   switch (name) {
     case "get_scene":
       return "read the canvas";
@@ -453,7 +453,11 @@ const describeCall = (name: string, input: any): string => {
     case "set_style":
       return `restyled ${input.ids?.length ?? 0} element(s)`;
     case "remove_element":
-      return "removed an element";
+      // A shape takes its bound arrows with it, so a later delete of one of
+      // those arrows is a no-op. Say so rather than claiming another removal.
+      return result?.already_removed
+        ? "already gone (removed with its shape)"
+        : `removed ${result?.removed_ids?.length ?? 1} element(s)`;
     default:
       return name;
   }

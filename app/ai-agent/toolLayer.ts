@@ -487,7 +487,7 @@ export const set_style = (
  * ```json
  * {
  *   "name": "remove_element",
- *   "description": "Delete an element by id. Also removes that element's label and any arrows bound to it, so no dangling arrows are left behind.",
+ *   "description": "Delete an element by id. Deleting a shape also removes its label and any arrows bound to it, so those arrows disappear automatically — do NOT also call remove_element for them. When the user asks to delete several elements, issue one call per shape and leave the connecting arrows out. Calling it for something that has already gone is a harmless no-op.",
  *   "input_schema": {
  *     "type": "object",
  *     "properties": {
@@ -503,7 +503,31 @@ export const remove_element = (
   args: { id: string },
 ) => {
   const { id } = args;
-  const target = requireLiveElement(api, id, "id");
+
+  const target = api.getSceneElements().find((el) => el.id === id);
+
+  if (!target) {
+    // Deleting a shape cascades to the arrows bound to it, so an agent working
+    // through a multi-selection will routinely reach an arrow that already went
+    // with its shape. That is a no-op, not a failure — reporting it as an error
+    // makes a correct deletion look broken. An id we have never seen is still a
+    // real mistake, so those keep throwing.
+    const everExisted = api
+      .getSceneElementsIncludingDeleted()
+      .some((el) => el.id === id);
+
+    if (everExisted) {
+      return {
+        removed_ids: [],
+        already_removed: true,
+        note: `"${id}" was already removed — most likely an arrow that was deleted along with a shape it was bound to. Nothing left to do.`,
+      };
+    }
+
+    throw new Error(
+      `id "${id}" does not exist on the canvas. Call get_scene to see the current element ids.`,
+    );
+  }
 
   // Deleting a shape must also delete what hangs off it, otherwise Excalidraw
   // is left with a label pointing at nothing and arrows bound to a ghost.
