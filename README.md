@@ -18,7 +18,11 @@ coordinates arithmetically from the elements that already exist.
 │       │  ◄──── tool_calls ──────────────┤   └─ Anthropic     │
 │       ▼                     │        │                      │
 │  toolLayer.ts               │        │  (holds the API key) │
-│   └─ excalidrawAPI ─► canvas│        └──────────────────────┘
+│   ├─ excalidrawAPI ─► canvas│        │                      │
+│   └─ teach_diagram ─┐       │        │  /api/tutor/lesson   │
+│                     ▼       │        │  /api/tutor/speech   │
+│  tutorSession ──────────────────────►│   └─ OpenAI TTS      │
+│   └─ speaks + traces cursor │        └──────────────────────┘
 └─────────────────────────────┘
 ```
 
@@ -30,7 +34,8 @@ this project visible.
 
 ```
 app/ai-agent/     the fork's additions: toolLayer, ChatSidebar, the tutor
-                  (TutorControls, tutorPlayer, tutorCursor), hooks, types/
+                  (tutorSession, tutorPlayer, tutorCursor, TutorControls),
+                  hooks, types/
 app/tests/        unit + end-to-end tests
 server/           the chat-to-tool-call backend + tutor lesson/TTS routes
 setup.sh          clones Excalidraw and wires the sidebar into App.tsx
@@ -76,9 +81,9 @@ with `LLM_PROVIDER` in `server/.env`; a request may also override it per call wi
 
 `GET /api/health` reports which providers are actually configured.
 
-## Tools implemented in this MVP
+## Tools
 
-All five run in the browser, in `excalidraw/excalidraw-app/ai-agent/toolLayer.ts`.
+All of them run in the browser, in `excalidraw/excalidraw-app/ai-agent/toolLayer.ts`.
 Each function carries its exact Claude `tool_use` schema in a JSDoc block; the copy
 actually sent to the model lives in `server/src/toolSchemas.js`.
 
@@ -90,6 +95,7 @@ actually sent to the model lives in `server/src/toolSchemas.js`.
 | `bind_arrow(source_id, target_id)` | Arrow between two existing elements using Excalidraw's **native binding**, so it snaps to shape edges and follows them when moved. |
 | `set_style(ids[], backgroundColor?, strokeColor?, fillStyle?)` | Recolours elements **already on the canvas**, in place. |
 | `remove_element(id)` | Deletes an element, its label, and any arrows bound to it. |
+| `teach_diagram()` | Starts a spoken walkthrough of the canvas (see [the tutor](#the-agentic-tutor)). Returns when the lesson *starts*, not when it ends. |
 
 `add_rectangle` also takes optional `backgroundColor` / `strokeColor` / `fillStyle`.
 
@@ -154,11 +160,27 @@ browsers without the API, so Firefox users just see **Send**.
 
 ## The agentic tutor
 
-Click **Teach** (or type "teach") and the agent analyzes the whole canvas and delivers a
-full spoken walkthrough of the diagram — while a **"Tutor" cursor traces the canvas**,
-gliding to each element as it is being explained, like a teacher at a whiteboard. Stop
-ends the lesson instantly. The finished walkthrough also lands in the chat history, so a
+Ask to be taught and the agent analyzes the whole canvas and delivers a full spoken
+walkthrough of the diagram — while a **"Tutor" cursor traces the canvas**, gliding to
+each element as it is being explained, like a teacher at a whiteboard. Stop ends the
+lesson instantly. The finished walkthrough also lands in the chat history, so a
 follow-up like *"why is there a load balancer?"* has the lesson as context.
+
+**Teaching is a tool, not a side channel.** `teach_diagram` sits in the same registry as
+the drawing tools, so the model decides when to teach from ordinary language — "explain
+this diagram", "walk me through it" — and can compose it with drawing in a single turn
+("draw a 3-tier architecture and then explain it to me" draws, binds, then teaches).
+There is no keyword matching in the UI. The **Teach** button is a second entry point into
+the same session, so the model and the button can never start two lessons at once, and
+Stop ends whichever is playing.
+
+The one way this tool differs from the others: it starts a *process* rather than editing
+the scene. `executeTool` is synchronous and a lesson runs for a minute or more, so
+`teach_diagram` returns as soon as the lesson **starts** — blocking would freeze the
+agent loop for the whole narration. Its tool description says so explicitly, so the model
+does not sit and poll it. Because the session lives outside React (tools have no access
+to component state), it is a small external store that `TutorControls` reads with
+`useSyncExternalStore`.
 
 The design hinges on one idea: **the lesson is data, not prose.** The scene is sent to
 `POST /api/tutor/lesson`, where the chat model runs with a teaching prompt and a single
@@ -325,7 +347,7 @@ element ids not crashing the tracer. The tutor's live e2e cases (lesson ids all 
 `/api/tutor/speech` returns actual mpeg bytes) sit in `aiAgent.e2e.test.tsx` and
 self-skip unless `/api/health` reports `tts: true`.
 
-`aiToolLayer.test.tsx` mounts a real Excalidraw and exercises all six tools,
+`aiToolLayer.test.tsx` mounts a real Excalidraw and exercises the scene-editing tools,
 including asserting that `bind_arrow` produces real bindings on both ends and that
 `remove_element` cleans up labels and dangling arrows.
 

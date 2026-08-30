@@ -1,5 +1,5 @@
 /**
- * Canonical Claude `tool_use` definitions for the 5 MVP tools.
+ * Canonical Claude `tool_use` definitions for every tool the agent can call.
  *
  * These are the definitions actually sent to the model. The matching browser-side
  * implementations live in `excalidraw/excalidraw-app/ai-agent/toolLayer.ts`, which
@@ -135,6 +135,17 @@ export const TOOL_SCHEMAS = [
       },
       required: ["id"],
     },
+  },
+  {
+    /**
+     * The tutor. Note the "returns when it STARTS" wording: the browser cannot
+     * block its agent loop for a minute of narration, so the tool result means
+     * the lesson began, not that it finished.
+     */
+    name: "teach_diagram",
+    description:
+      "Start a spoken walkthrough of the diagram currently on the canvas: the tutor analyses the scene, explains what the system does and how data flows through it out loud, and traces a cursor over each element as it talks about it. Use this whenever the user asks to be taught, or for an explanation or walkthrough of the diagram ('teach me this', 'explain this diagram', 'walk me through it'). Requires a non-empty canvas — draw the diagram first if it is empty. IMPORTANT: this returns as soon as the lesson STARTS, not when it finishes; the narration then plays on its own. Call it once, never poll it or call it again to check progress, and end your turn with one short sentence.",
+    input_schema: { type: "object", properties: {}, required: [] },
   },
 ];
 

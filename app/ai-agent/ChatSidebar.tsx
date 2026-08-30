@@ -92,10 +92,6 @@ const useSelectionReferences = (
   return { references, dismiss, clear };
 };
 
-/** "teach", "teach me", "teach me this diagram" — the spoken-lesson trigger. */
-const isTeachCommand = (text: string) =>
-  /^teach(\s+me)?(\s+(this|the))?(\s+diagram)?\s*[.!]?$/i.test(text);
-
 export const AIChatSidebar = () => {
   const excalidrawAPI = useExcalidrawAPI();
 
@@ -114,15 +110,14 @@ export const AIChatSidebar = () => {
   const history = useRef<AgentMessage[]>([]);
   const transcriptRef = useRef<HTMLDivElement>(null);
 
-  // TutorControls hands us its teach() so typing "teach" can trigger a lesson.
-  const teachRef = useRef<(() => void) | null>(null);
-
   const append = useCallback((entry: ChatEntry) => {
     setEntries((current) => [...current, entry]);
   }, []);
 
   // The finished walkthrough joins the chat history, so a follow-up like
-  // "why is there a load balancer?" has the lesson as context.
+  // "why is there a load balancer?" has the lesson as context. A lesson the
+  // model started via teach_diagram is already in the history as a tool call,
+  // but the narration itself is not, so it is recorded either way.
   const recordLesson = useCallback((content: string) => {
     history.current.push({ role: "user", content: "Teach me this diagram." });
     history.current.push({ role: "assistant", content });
@@ -142,13 +137,6 @@ export const AIChatSidebar = () => {
     }
 
     stopDictation();
-
-    // "teach" is a command, not a chat message: hand it to the tutor.
-    if (isTeachCommand(text)) {
-      setInput("");
-      teachRef.current?.();
-      return;
-    }
 
     // Snapshot the pills now — the canvas selection changes as the agent draws.
     const attached = references;
@@ -394,11 +382,7 @@ export const AIChatSidebar = () => {
                 <MicIcon />
               </button>
             )}
-            <TutorControls
-              onEntry={append}
-              onAssistantMessage={recordLesson}
-              teachRef={teachRef}
-            />
+            <TutorControls onEntry={append} onAssistantMessage={recordLesson} />
           </div>
         </form>
       </div>
@@ -460,6 +444,10 @@ const describeCall = (name: string, input: any, result?: any): string => {
       return "connected two elements with an arrow";
     case "set_style":
       return `restyled ${input.ids?.length ?? 0} element(s)`;
+    case "teach_diagram":
+      return `started a spoken walkthrough of ${
+        result?.elements ?? 0
+      } element(s)`;
     case "remove_element":
       // A shape takes its bound arrows with it, so a later delete of one of
       // those arrows is a no-op. Say so rather than claiming another removal.

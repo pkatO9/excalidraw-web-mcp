@@ -5,6 +5,8 @@ import {
   convertToExcalidrawElements,
 } from "@excalidraw/excalidraw";
 
+import { startLesson } from "./tutorSession";
+
 import type { ExcalidrawElementSkeleton } from "@excalidraw/element/transform";
 import type { ExcalidrawElement } from "@excalidraw/element/types";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
@@ -54,7 +56,8 @@ export type ToolName =
   | "add_text"
   | "bind_arrow"
   | "set_style"
-  | "remove_element";
+  | "remove_element"
+  | "teach_diagram";
 
 const round = (n: number) => Math.round(n * 100) / 100;
 
@@ -647,6 +650,32 @@ export const remove_element = (
   return { removed_ids: [...doomed] };
 };
 
+/**
+ * Start a spoken walkthrough of the current diagram.
+ *
+ * @remarks
+ * Unlike every other tool here this one has no effect on the scene — it starts
+ * a *process*: the tutor fetches a lesson, narrates it, and traces a cursor
+ * over each element as it speaks.
+ *
+ * It returns as soon as the lesson starts, because `executeTool` is
+ * synchronous and a lesson runs for a minute or more; blocking here would
+ * freeze the agent loop for the whole narration. The model is told in its tool
+ * description that the return value means "started", not "finished".
+ *
+ * Preconditions throw so `executeTool` reports them as a tool error the model
+ * can act on (an empty canvas → draw something first).
+ *
+ * ```jsonc
+ * {
+ *   "name": "teach_diagram",
+ *   "input_schema": { "type": "object", "properties": {}, "required": [] }
+ * }
+ * ```
+ */
+export const teach_diagram = (api: ExcalidrawImperativeAPI) =>
+  startLesson(api, () => get_scene(api));
+
 /** Dispatch table used by the chat sidebar to run whatever the model asked for. */
 export const TOOL_IMPLEMENTATIONS: Record<
   ToolName,
@@ -658,6 +687,7 @@ export const TOOL_IMPLEMENTATIONS: Record<
   bind_arrow: (api, input) => bind_arrow(api, input),
   set_style: (api, input) => set_style(api, input),
   remove_element: (api, input) => remove_element(api, input),
+  teach_diagram: (api) => teach_diagram(api),
 };
 
 export const executeTool = (

@@ -1,7 +1,6 @@
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 
 import { API_BASE } from "./config";
-import { get_scene } from "./toolLayer";
 import {
   hideTutorCursor,
   segmentAnchors,
@@ -9,6 +8,7 @@ import {
   tracePointer,
 } from "./tutorCursor";
 
+import type { SceneElementSummary } from "./toolLayer";
 import type { CursorPoint } from "./tutorCursor";
 import type { TutorLesson, TutorPlaybackCallbacks } from "./types/tutor";
 
@@ -166,11 +166,12 @@ const playChunk = async (
   cursorEnabled: boolean,
   signal: AbortSignal,
   cursorFrom: CursorPoint | null,
+  readScene: () => SceneElementSummary[],
 ): Promise<CursorPoint | null> => {
   // Re-read the scene per chunk: the user may move things mid-lesson, and the
   // cursor should point where the element is NOW.
   const anchors = cursorEnabled
-    ? segmentAnchors(get_scene(api), chunk.elementIds)
+    ? segmentAnchors(readScene(), chunk.elementIds)
     : [];
 
   if (anchors.length > 0) {
@@ -215,7 +216,20 @@ const playChunk = async (
 export const playLesson = async (
   api: ExcalidrawImperativeAPI,
   lesson: TutorLesson,
-  { signal, onNarration }: TutorPlaybackCallbacks & { signal: AbortSignal },
+  {
+    signal,
+    onNarration,
+    readScene,
+  }: TutorPlaybackCallbacks & {
+    signal: AbortSignal;
+    /**
+     * Reads the live scene. Injected rather than imported so this module
+     * never depends on the tool layer at runtime — the tool layer imports the
+     * tutor session to register `teach_diagram`, and a cycle back into here
+     * would be fragile.
+     */
+    readScene: () => SceneElementSummary[];
+  },
 ) => {
   const chunks = toChunks(lesson);
   if (chunks.length === 0) {
@@ -269,6 +283,7 @@ export const playLesson = async (
         cursorEnabled,
         signal,
         cursorAt,
+        readScene,
       );
     }
   } finally {

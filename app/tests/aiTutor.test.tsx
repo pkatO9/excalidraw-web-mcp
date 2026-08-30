@@ -9,7 +9,13 @@ import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 import { TutorControls } from "../ai-agent/TutorControls";
 import { TUTOR_SOCKET_ID, segmentAnchors } from "../ai-agent/tutorCursor";
 import { playLesson } from "../ai-agent/tutorPlayer";
-import { add_rectangle, get_scene } from "../ai-agent/toolLayer";
+import { isTeaching, stopLesson } from "../ai-agent/tutorSession";
+import {
+  TOOL_IMPLEMENTATIONS,
+  add_rectangle,
+  executeTool,
+  get_scene,
+} from "../ai-agent/toolLayer";
 
 import type { TutorLesson } from "../ai-agent/types/tutor";
 
@@ -79,7 +85,11 @@ beforeEach(() => {
   (URL as any).revokeObjectURL = vi.fn();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // The session is a module singleton, so a lesson left running would leak
+  // into the next test. Stop it and let the real cleanup path settle.
+  stopLesson();
+  await until(() => !isTeaching());
   vi.restoreAllMocks();
 });
 
@@ -93,6 +103,64 @@ const mountEditor = async () => {
 
 const tutorCollaborator = (api: ExcalidrawImperativeAPI) =>
   api.getAppState().collaborators?.get(TUTOR_SOCKET_ID as any);
+
+describe("teach_diagram as a WebMCP tool", () => {
+  let api: ExcalidrawImperativeAPI;
+
+  beforeEach(async () => {
+    api = await mountEditor();
+  });
+
+  it("is registered in the tool layer alongside the drawing tools", () => {
+    expect(Object.keys(TOOL_IMPLEMENTATIONS)).toContain("teach_diagram");
+  });
+
+  it("starts a lesson and returns immediately, without waiting for narration", () => {
+    add_rectangle(api, {
+      x: 100,
+      y: 100,
+      width: 180,
+      height: 80,
+      label: "Database",
+    });
+
+    const outcome = executeTool(api, "teach_diagram", {});
+
+    // The agent loop is synchronous; a minute of audio must not block it.
+    expect(outcome).toMatchObject({
+      ok: true,
+      result: { started: true, elements: 1 },
+    });
+    expect(isTeaching()).toBe(true);
+  });
+
+  it("reports an empty canvas as a tool error the model can recover from", () => {
+    const outcome = executeTool(api, "teach_diagram", {});
+
+    expect(outcome.ok).toBe(false);
+    expect((outcome as { error: string }).error).toMatch(/empty/i);
+    expect(isTeaching()).toBe(false);
+  });
+
+  it("refuses to start a second lesson on top of a running one", () => {
+    add_rectangle(api, { x: 0, y: 0, width: 180, height: 80, label: "A" });
+
+    expect(executeTool(api, "teach_diagram", {}).ok).toBe(true);
+    const second = executeTool(api, "teach_diagram", {});
+
+    expect(second.ok).toBe(false);
+    expect((second as { error: string }).error).toMatch(/already/i);
+  });
+
+  it("shares one session with the Teach button — stopLesson ends a tool-started lesson", async () => {
+    add_rectangle(api, { x: 0, y: 0, width: 180, height: 80, label: "A" });
+    executeTool(api, "teach_diagram", {});
+    expect(isTeaching()).toBe(true);
+
+    stopLesson();
+    await until(() => !isTeaching());
+  });
+});
 
 describe("segmentAnchors", () => {
   it("anchors above the top-centre of each referenced element, in order", () => {
@@ -141,6 +209,7 @@ describe("playLesson", () => {
     const narrated: string[] = [];
     const done = playLesson(api, lesson, {
       signal: new AbortController().signal,
+      readScene: () => get_scene(api),
       onNarration: (text) => narrated.push(text),
     });
 
@@ -159,6 +228,7 @@ describe("playLesson", () => {
   it("shows the Tutor cursor while a segment plays and removes it after", async () => {
     const done = playLesson(api, lesson, {
       signal: new AbortController().signal,
+      readScene: () => get_scene(api),
       onNarration: () => {},
     });
 
@@ -179,6 +249,7 @@ describe("playLesson", () => {
     const controller = new AbortController();
     const done = playLesson(api, lesson, {
       signal: controller.signal,
+      readScene: () => get_scene(api),
       onNarration: (text) => narrated.push(text),
     });
 
@@ -200,6 +271,7 @@ describe("playLesson", () => {
     };
     const done = playLesson(api, broken, {
       signal: new AbortController().signal,
+      readScene: () => get_scene(api),
       onNarration: (text) => narrated.push(text),
     });
 
@@ -225,6 +297,7 @@ describe("playLesson", () => {
     await expect(
       playLesson(api, lesson, {
         signal: new AbortController().signal,
+        readScene: () => get_scene(api),
         onNarration: () => {},
       }),
     ).rejects.toThrow(/TTS is not configured/);
