@@ -10,7 +10,6 @@ import { describe, it } from "node:test";
 
 import {
   lessonRequestSchema,
-  speechRequestSchema,
   walkthroughSchema,
 } from "../src/tutorSchema.js";
 import { runTutorLesson, sanitizeLesson } from "../src/tutor.js";
@@ -33,23 +32,6 @@ const lesson = (overrides = {}) => ({
   ],
   closing: "That's the whole flow.",
   ...overrides,
-});
-
-describe("speechRequestSchema", () => {
-  it("accepts a normal narration line", () => {
-    assert.equal(
-      speechRequestSchema.parse({ text: "Hello there." }).text,
-      "Hello there.",
-    );
-  });
-
-  it("rejects empty text", () => {
-    assert.throws(() => speechRequestSchema.parse({ text: "" }));
-  });
-
-  it("caps text length so the route cannot be abused as a free TTS proxy", () => {
-    assert.throws(() => speechRequestSchema.parse({ text: "x".repeat(5001) }));
-  });
 });
 
 describe("lessonRequestSchema", () => {

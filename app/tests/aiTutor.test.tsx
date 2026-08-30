@@ -28,34 +28,69 @@ const until = async (cond: () => boolean) => {
 };
 
 /**
- * jsdom implements neither audio playback nor object URLs. `play` is stubbed to
- * queue a manual trigger, so each test decides exactly when a clip "finishes" —
- * that is what lets us assert on the state *during* playback.
+ * jsdom does not implement the Web Speech API, so we install a fake
+ * `speechSynthesis`. Each `speak()` parks a resolver instead of speaking, so a
+ * test decides exactly when an utterance "finishes" — which is what lets us
+ * assert on state *during* narration.
  */
 const pendingClips: Array<() => void> = [];
+let spoken: string[] = [];
 
 const finishClip = async () => {
   await until(() => pendingClips.length > 0);
   pendingClips.shift()!();
 };
 
+class FakeUtterance {
+  text: string;
+  voice: unknown = null;
+  rate = 1;
+  onend: (() => void) | null = null;
+  onerror: ((event: { error: string }) => void) | null = null;
+
+  constructor(text: string) {
+    this.text = text;
+  }
+}
+
+const installSpeechStub = () => {
+  spoken = [];
+  const speech = {
+    speaking: true,
+    speak: (utterance: FakeUtterance) => {
+      spoken.push(utterance.text);
+      pendingClips.push(() => utterance.onend?.());
+    },
+    // cancel() detaches nothing itself — tutorSpeech clears its own handlers
+    // before calling it, mirroring the real "interrupted" behaviour.
+    cancel: () => {
+      pendingClips.length = 0;
+    },
+    resume: () => {},
+    pause: () => {},
+    getVoices: () => [],
+  };
+  (window as any).speechSynthesis = speech;
+  (globalThis as any).SpeechSynthesisUtterance = FakeUtterance;
+};
+
 let fetchSpy: ReturnType<typeof vi.spyOn>;
 
-const stubNetwork = (health: { tts: boolean }) => {
+const CANNED_LESSON = {
+  intro: "Here is your diagram.",
+  segments: [{ elementIds: ["placeholder"], narration: "A box." }],
+  closing: "Done.",
+};
+
+const stubNetwork = () => {
   fetchSpy = vi
     .spyOn(globalThis, "fetch" as any)
     .mockImplementation(async (url: any) => {
       const target = String(url);
-      if (target.endsWith("/api/health")) {
+      if (target.endsWith("/api/tutor/lesson")) {
         return {
           ok: true,
-          json: async () => ({ ok: true, tts: health.tts }),
-        } as Response;
-      }
-      if (target.endsWith("/api/tutor/speech")) {
-        return {
-          ok: true,
-          blob: async () => new Blob(["audio"], { type: "audio/mpeg" }),
+          json: async () => ({ lesson: CANNED_LESSON }),
         } as Response;
       }
       throw new Error(`Unexpected fetch in test: ${target}`);
@@ -64,25 +99,8 @@ const stubNetwork = (health: { tts: boolean }) => {
 
 beforeEach(() => {
   pendingClips.length = 0;
-  stubNetwork({ tts: true });
-
-  // jsdom never loads metadata, so duration stays NaN and the player would
-  // wait out its metadata timeout on every chunk. Report a real duration and
-  // fire the event, which both keeps the suite fast and exercises the
-  // real-duration pacing path rather than the estimate fallback.
-  vi.spyOn(HTMLMediaElement.prototype, "duration", "get").mockReturnValue(0.05);
-
-  vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(function (
-    this: HTMLMediaElement,
-  ) {
-    this.dispatchEvent(new Event("loadedmetadata"));
-    pendingClips.push(() => this.dispatchEvent(new Event("ended")));
-    return Promise.resolve();
-  });
-  vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
-
-  (URL as any).createObjectURL = vi.fn(() => "blob:tutor-test");
-  (URL as any).revokeObjectURL = vi.fn();
+  stubNetwork();
+  installSpeechStub();
 });
 
 afterEach(async () => {
@@ -285,24 +303,40 @@ describe("playLesson", () => {
     await until(() => !tutorCollaborator(api));
   });
 
-  it("surfaces a speech-endpoint failure as a readable error", async () => {
-    fetchSpy.mockImplementation(async () => {
-      return {
-        ok: false,
-        status: 503,
-        json: async () => ({ error: "TTS is not configured." }),
-      } as Response;
-    });
+  it("surfaces a synthesis failure as a readable error, and still cleans up", async () => {
+    (window as any).speechSynthesis.speak = (utterance: FakeUtterance) => {
+      pendingClips.push(() =>
+        utterance.onerror?.({ error: "synthesis-failed" }),
+      );
+    };
 
-    await expect(
-      playLesson(api, lesson, {
-        signal: new AbortController().signal,
-        readScene: () => get_scene(api),
-        onNarration: () => {},
-      }),
-    ).rejects.toThrow(/TTS is not configured/);
+    const playing = playLesson(api, lesson, {
+      signal: new AbortController().signal,
+      readScene: () => get_scene(api),
+      onNarration: () => {},
+    });
+    await finishClip();
+
+    await expect(playing).rejects.toThrow(/synthesis-failed/);
     // hide goes through React setState, which flushes async - poll, don't read.
     await until(() => !tutorCollaborator(api));
+  });
+
+  it("treats an interrupted utterance as a stop, not a failure", async () => {
+    (window as any).speechSynthesis.speak = (utterance: FakeUtterance) => {
+      pendingClips.push(() => utterance.onerror?.({ error: "interrupted" }));
+    };
+
+    const playing = playLesson(api, lesson, {
+      signal: new AbortController().signal,
+      readScene: () => get_scene(api),
+      onNarration: () => {},
+    });
+    for (let i = 0; i < 3; i++) {
+      await finishClip();
+    }
+
+    await expect(playing).resolves.toBeUndefined();
   });
 });
 
@@ -310,8 +344,7 @@ describe("TutorControls", () => {
   const entries: string[] = [];
   const recorded: string[] = [];
 
-  const mountControls = async (health: { tts: boolean }) => {
-    stubNetwork(health);
+  const mountControls = async () => {
     entries.length = 0;
     recorded.length = 0;
     const apiPromise = resolvablePromise<ExcalidrawImperativeAPI>();
@@ -328,7 +361,7 @@ describe("TutorControls", () => {
   };
 
   it("refuses to teach an empty canvas without calling the backend", async () => {
-    const container = await mountControls({ tts: true });
+    const container = await mountControls();
     await until(() =>
       Boolean(container.querySelector("button.ai-tutor__teach")),
     );
@@ -343,16 +376,16 @@ describe("TutorControls", () => {
     expect(recorded).toHaveLength(0);
   });
 
-  it("renders a Teach button when the backend reports TTS support", async () => {
-    const container = await mountControls({ tts: true });
+  it("renders a Teach button when the browser can speak", async () => {
+    const container = await mountControls();
     await until(() =>
       Boolean(container.querySelector("button.ai-tutor__teach")),
     );
   });
 
-  it("renders nothing when the backend has no TTS configured", async () => {
-    const container = await mountControls({ tts: false });
-    // Give the health check time to land, then confirm the button never showed.
+  it("renders nothing in a browser without speech synthesis", async () => {
+    delete (window as any).speechSynthesis;
+    const container = await mountControls();
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(container.querySelector("button.ai-tutor__teach")).toBeNull();
   });

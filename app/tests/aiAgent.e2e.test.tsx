@@ -22,8 +22,8 @@ const backendUp = Boolean(health);
 
 // `describe.skipIf` is not in the ambient test typings here, so branch manually.
 const describeE2E = backendUp ? describe : describe.skip;
-// The tutor additionally needs TTS credentials on the backend.
-const describeTutorE2E = backendUp && health?.tts ? describe : describe.skip;
+// The tutor's voice is the browser's, so the backend only has to be up.
+const describeTutorE2E = describeE2E;
 
 describeE2E("AI agent end-to-end", () => {
   let api: ExcalidrawImperativeAPI;
@@ -223,19 +223,6 @@ describeTutorE2E("AI tutor end-to-end", () => {
         expect(ids.has(id)).toBe(true);
       }
     }
-  }, 300000);
-
-  it("synthesizes non-empty mpeg audio for a narration line", async () => {
-    const response = await fetch(`${API_BASE}/api/tutor/speech`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text: "This is the load balancer." }),
-    });
-
-    expect(response.ok).toBe(true);
-    expect(response.headers.get("content-type")).toContain("audio/mpeg");
-    const bytes = await response.arrayBuffer();
-    expect(bytes.byteLength).toBeGreaterThan(1000);
   }, 300000);
 });
 
