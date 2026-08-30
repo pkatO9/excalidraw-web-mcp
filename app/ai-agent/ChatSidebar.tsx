@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { API_BASE } from "./config";
 import { executeTool, get_scene } from "./toolLayer";
 import { TutorControls } from "./TutorControls";
+import { VoiceControls } from "./VoiceControls";
 import { useDictation } from "./useDictation";
 import { useResizableSidebar } from "./useResizableSidebar";
 
@@ -118,6 +119,18 @@ export const AIChatSidebar = () => {
   // "why is there a load balancer?" has the lesson as context. A lesson the
   // model started via teach_diagram is already in the history as a tool call,
   // but the narration itself is not, so it is recorded either way.
+  /**
+   * Mirror what was said aloud into the typed agent's history, so switching
+   * between talking and typing continues one conversation instead of starting
+   * a second one that has never heard the first.
+   */
+  const recordSpoken = useCallback(
+    (role: "user" | "assistant", content: string) => {
+      history.current.push({ role, content } as AgentMessage);
+    },
+    [],
+  );
+
   const recordLesson = useCallback((content: string) => {
     history.current.push({ role: "user", content: "Teach me this diagram." });
     history.current.push({ role: "assistant", content });
@@ -382,6 +395,7 @@ export const AIChatSidebar = () => {
                 <MicIcon />
               </button>
             )}
+            <VoiceControls onEntry={append} onTranscript={recordSpoken} />
             <TutorControls onEntry={append} onAssistantMessage={recordLesson} />
           </div>
         </form>

@@ -9,3 +9,6 @@ node_modules/
 
 # scratch file from the IDE, not part of the project
 om.txt
+
+# stray az CLI state from running commands in this dir
+.azure/
