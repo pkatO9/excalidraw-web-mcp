@@ -17,6 +17,74 @@ export const TOOL_SCHEMAS = [
     },
   },
   {
+    /**
+     * The layout tool. Box-by-box placement cannot avoid arrows crossing
+     * boxes, because at the moment a box is positioned the edges it will carry
+     * do not exist yet. This takes the whole graph and hands it to a layered
+     * (Sugiyama) layout, which is what Mermaid does via dagre and what the
+     * Excalidraw MCP servers do — the model gives structure, the engine gives
+     * geometry.
+     */
+    name: "create_diagram",
+    description:
+      "Draw a whole diagram in one call from its STRUCTURE — the boxes and what connects to what — and let the layout engine place everything. USE THIS FOR ANY REQUEST THAT MEANS BUILDING A DIAGRAM OR A SUBSYSTEM, even a small one. Do not place boxes one at a time and connect them afterwards: that reliably produces arrows cutting across boxes, because when each box is positioned the connections it will carry are not known yet. This tool sees the whole graph, so it ranks the nodes into layers, orders them to minimise crossings, and routes long arrows around whatever sits between. Keep add_rectangle and bind_arrow for small edits to a diagram that already exists.",
+    input_schema: {
+      type: "object",
+      properties: {
+        nodes: {
+          type: "array",
+          description: "Every box in the diagram.",
+          items: {
+            type: "object",
+            properties: {
+              key: {
+                type: "string",
+                description:
+                  'Short id used only to describe edges, e.g. "db". Never shown to the user.',
+              },
+              label: {
+                type: "string",
+                description: "Text shown inside the box.",
+              },
+              shape: {
+                type: "string",
+                enum: ["rectangle", "diamond", "ellipse"],
+                description:
+                  "rectangle for a service, component or store (the default); diamond for a decision or branch; ellipse for a start or end point.",
+              },
+            },
+            required: ["key", "label"],
+          },
+        },
+        edges: {
+          type: "array",
+          description:
+            "Connections, each pointing from the upstream element to the downstream one.",
+          items: {
+            type: "object",
+            properties: {
+              from: { type: "string", description: "key of the source node." },
+              to: { type: "string", description: "key of the target node." },
+            },
+            required: ["from", "to"],
+          },
+        },
+        direction: {
+          type: "string",
+          enum: ["TB", "LR"],
+          description:
+            "TB (default) stacks the flow downward; LR runs it left to right. Prefer TB for architectures, LR for short linear pipelines.",
+        },
+        replace: {
+          type: "boolean",
+          description:
+            "true clears the canvas first. Use when the user asks to start over or replace what is there.",
+        },
+      },
+      required: ["nodes", "edges"],
+    },
+  },
+  {
     name: "add_rectangle",
     description:
       "Add a labelled rectangle. x/y are the top-left corner. Use this for every box in an architecture diagram (services, load balancers, databases, caches). Collision is handled for you: if the spot you ask for is taken, the box is placed at the nearest free position instead and the response tells you where it actually landed — so boxes can never overlap. ALWAYS use the x/y in the response, not the ones you requested, when positioning anything relative to this box. Returns the new element's id, which you need for bind_arrow.",

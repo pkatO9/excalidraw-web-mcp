@@ -106,6 +106,44 @@ Both are set in the tool layer rather than left to the prompt, so they hold on e
 regardless of what the model does. Passing an explicit `fillStyle` (`solid` /
 `cross-hatch`) still overrides it.
 
+## Layout: structure from the model, geometry from an engine
+
+`create_diagram` takes a whole graph — nodes and edges — and places all of it in one
+call. This exists because incremental placement **cannot** produce a clean diagram, for
+a structural reason rather than a tuning one: at the moment a box is positioned, the
+edges it will eventually carry do not exist yet, so there is nothing to lay it out
+against. Arrows then cut across boxes and no amount of prompt work fixes it.
+
+Every tool that gets this right solves it the same way. Mermaid — and therefore Claude's
+diagrams — hands the graph to dagre; the Excalidraw MCP servers use Sugiyama or grandalf.
+The model supplies **structure**, the engine decides **geometry**.
+
+`app/ai-agent/layout.ts` implements the standard layered (Sugiyama) pipeline:
+
+1. **break cycles** so the rest can assume a DAG (reversal is layout-only)
+2. **assign layers** by longest path
+3. **insert dummy nodes** so an edge spanning layers reserves a corridor in each
+4. **order within layers** to minimise crossings (weighted median + adjacent transpose)
+5. **assign coordinates**, with long edges weighted so their chains straighten
+
+Two details do most of the work, and both were found by tests failing rather than by
+reasoning:
+
+- **Arrows are routed, not straight.** The dummy corridors become bend points on the
+  arrow. A straight segment cannot be relied on to stay inside its corridor once several
+  long edges converge on one node — widening the corridor does not help, only routing
+  does. Excalidraw keeps bend points on a bound arrow, so the bindings survive.
+- **The anchor axis is pinned to the layout direction.** Left to itself `bind_arrow`
+  picks bottom/top or left/right by dominant axis, so a widely spaced parent and child
+  anchor on their *sides* and the arrow runs horizontally straight through the siblings
+  between them. In a layered diagram every edge leaves the bottom and enters the top,
+  which is how dot and Mermaid draw them.
+
+Shapes: `rectangle` (default), `diamond` for decisions, `ellipse` for start/end points.
+
+The incremental tools remain the right thing for editing a diagram that already exists —
+adding one box beside another, connecting two elements, recolouring.
+
 ## Overlap is prevented by the tool layer, not the prompt
 
 `add_rectangle` resolves a **non-overlapping position before creating anything**. If the

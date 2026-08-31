@@ -8,6 +8,7 @@ import {
   add_rectangle,
   add_text,
   bind_arrow,
+  create_diagram,
   executeTool,
   get_scene,
   remove_element,
@@ -313,6 +314,135 @@ describe("AI agent tool layer", () => {
     }
   });
 
+  it("create_diagram draws the whole graph with no arrow crossing a box", () => {
+    // The failure this tool exists for: built box-by-box, this graph produced
+    // arrows slicing diagonally across Auth and Notification.
+    const result = create_diagram(api, {
+      nodes: [
+        { key: "rider", label: "Rider App" },
+        { key: "gateway", label: "API Gateway" },
+        { key: "dispatch", label: "Dispatch Service" },
+        { key: "driver", label: "Driver App" },
+        { key: "matching", label: "Matching Service" },
+        { key: "auth", label: "Auth Service" },
+        { key: "trip", label: "Trip & Pricing" },
+        { key: "payment", label: "Payment Service" },
+        { key: "notification", label: "Notification Service" },
+        { key: "datastore", label: "Data Store" },
+      ],
+      edges: [
+        { from: "rider", to: "gateway" },
+        { from: "gateway", to: "dispatch" },
+        { from: "gateway", to: "auth" },
+        { from: "dispatch", to: "driver" },
+        { from: "dispatch", to: "matching" },
+        { from: "dispatch", to: "trip" },
+        { from: "dispatch", to: "notification" },
+        { from: "matching", to: "datastore" },
+        { from: "trip", to: "datastore" },
+        { from: "trip", to: "payment" },
+        { from: "payment", to: "datastore" },
+        { from: "notification", to: "datastore" },
+        { from: "auth", to: "datastore" },
+      ],
+    });
+
+    expect(result.arrows_bound).toBe(13);
+    expect((result as any).failed_edges).toBeUndefined();
+
+    const scene = get_scene(api);
+    const boxes = scene.filter((el) => el.type !== "arrow");
+    expect(boxes).toHaveLength(10);
+    expectNoOverlaps(scene);
+
+    // every arrow is genuinely bound at both ends
+    const ids = new Set(scene.map((el) => el.id));
+    for (const arrow of scene.filter((el) => el.type === "arrow")) {
+      expect(ids.has(arrow.startBinding!)).toBe(true);
+      expect(ids.has(arrow.endBinding!)).toBe(true);
+    }
+
+    // and no drawn arrow passes through a box it does not connect
+    const raw = api.getSceneElements();
+    const rects = boxes.map((b) => ({
+      id: b.id,
+      x: b.x,
+      y: b.y,
+      width: b.width,
+      height: b.height,
+    }));
+
+    for (const arrow of raw.filter((el) => el.type === "arrow") as any[]) {
+      const path = arrow.points.map(([px, py]: number[]) => ({
+        x: arrow.x + px,
+        y: arrow.y + py,
+      }));
+      for (const rect of rects) {
+        if (
+          rect.id === arrow.startBinding?.elementId ||
+          rect.id === arrow.endBinding?.elementId
+        ) {
+          continue;
+        }
+        for (let i = 0; i + 1 < path.length; i++) {
+          const hit = segmentCrossesRect(path[i], path[i + 1], rect);
+          expect(hit).toBe(false);
+        }
+      }
+    }
+  });
+
+  it("create_diagram supports diamonds and ellipses", () => {
+    const result = create_diagram(api, {
+      nodes: [
+        { key: "start", label: "Start", shape: "ellipse" },
+        { key: "check", label: "Valid?", shape: "diamond" },
+        { key: "done", label: "Done" },
+      ],
+      edges: [
+        { from: "start", to: "check" },
+        { from: "check", to: "done" },
+      ],
+    });
+
+    const raw = api.getSceneElements();
+    const shapeOf = (key: string) =>
+      raw.find((el) => el.id === result.nodes.find((n) => n.key === key)!.id)!
+        .type;
+
+    expect(shapeOf("start")).toBe("ellipse");
+    expect(shapeOf("check")).toBe("diamond");
+    expect(shapeOf("done")).toBe("rectangle");
+  });
+
+  it("create_diagram rejects an edge naming an unknown node", () => {
+    expect(() =>
+      create_diagram(api, {
+        nodes: [{ key: "a", label: "A" }],
+        edges: [{ from: "a", to: "ghost" }],
+      }),
+    ).toThrow(/unknown node key/);
+  });
+
+  it("create_diagram places a new diagram clear of existing content", () => {
+    const existing = add_rectangle(api, {
+      x: 0,
+      y: 0,
+      width: 180,
+      height: 80,
+      label: "Already here",
+    });
+
+    create_diagram(api, {
+      nodes: [{ key: "a", label: "A" }],
+      edges: [],
+    });
+
+    expectNoOverlaps(get_scene(api));
+    // the old box survives when replace is not asked for
+    expect(get_scene(api).some((el) => el.id === existing.id)).toBe(true);
+  });
+
   it("bind_arrow reports a usable error for an unknown id", () => {
     const a = add_rectangle(api, {
       x: 0,
@@ -532,4 +662,55 @@ function expectNoOverlaps(boxes: ReturnType<typeof get_scene>) {
       }
     }
   }
+}
+
+/** Liang-Barsky: does the segment pass through the rect (ignoring grazes)? */
+function segmentCrossesRect(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  rect: { x: number; y: number; width: number; height: number },
+) {
+  const pad = 4;
+  const minX = rect.x + pad;
+  const maxX = rect.x + rect.width - pad;
+  const minY = rect.y + pad;
+  const maxY = rect.y + rect.height - pad;
+  if (minX >= maxX || minY >= maxY) {
+    return false;
+  }
+
+  let t0 = 0;
+  let t1 = 1;
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+
+  const clip = (p: number, q: number) => {
+    if (p === 0) {
+      return q >= 0;
+    }
+    const r = q / p;
+    if (p < 0) {
+      if (r > t1) {
+        return false;
+      }
+      if (r > t0) {
+        t0 = r;
+      }
+    } else {
+      if (r < t0) {
+        return false;
+      }
+      if (r < t1) {
+        t1 = r;
+      }
+    }
+    return true;
+  };
+
+  return (
+    clip(-dx, a.x - minX) &&
+    clip(dx, maxX - a.x) &&
+    clip(-dy, a.y - minY) &&
+    clip(dy, maxY - a.y)
+  );
 }

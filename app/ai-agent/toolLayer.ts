@@ -1,5 +1,6 @@
 import { DEFAULT_ELEMENT_PROPS, ROUNDNESS } from "@excalidraw/common";
 import { newElementWith } from "@excalidraw/element";
+
 import {
   CaptureUpdateAction,
   convertToExcalidrawElements,
@@ -8,6 +9,8 @@ import {
 import type { ExcalidrawElementSkeleton } from "@excalidraw/element/transform";
 import type { ExcalidrawElement } from "@excalidraw/element/types";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
+
+import { layoutGraph } from "./layout";
 
 import { startLesson } from "./tutorSession";
 
@@ -55,6 +58,7 @@ export type ToolName =
   | "add_rectangle"
   | "add_text"
   | "bind_arrow"
+  | "create_diagram"
   | "set_style"
   | "remove_element"
   | "teach_diagram";
@@ -80,19 +84,35 @@ const centerOf = (el: ExcalidrawElement) => ({
  * same way a person would: mostly-vertical relationships leave the bottom/top,
  * mostly-horizontal ones leave the right/left.
  */
-const edgeAnchor = (from: ExcalidrawElement, to: ExcalidrawElement) => {
+export type AnchorAxis = "vertical" | "horizontal";
+
+const edgeAnchor = (
+  from: ExcalidrawElement,
+  to: ExcalidrawElement,
+  axis?: AnchorAxis,
+  aimAt?: { x: number; y: number },
+) => {
   const a = centerOf(from);
-  const b = centerOf(to);
+  const b = aimAt ?? centerOf(to);
   const dx = b.x - a.x;
   const dy = b.y - a.y;
 
-  if (Math.abs(dy) >= Math.abs(dx)) {
-    // predominantly vertical: leave via the bottom or the top edge
+  // With no axis given, follow the dominant one — right for a loose arrow the
+  // user asked for between two arbitrary boxes.
+  //
+  // A layered diagram pins the axis instead. Left to itself, a widely spaced
+  // parent and child would anchor on their SIDES, and the arrow would then run
+  // horizontally through the layer, straight across the siblings sitting
+  // between them. Forcing bottom-to-top keeps every edge inside the gap
+  // between layers, which is what makes a hierarchy readable — and is how dot
+  // and Mermaid draw them.
+  const vertical = axis ? axis === "vertical" : Math.abs(dy) >= Math.abs(dx);
+
+  if (vertical) {
     return dy >= 0
       ? { x: a.x, y: from.y + from.height }
       : { x: a.x, y: from.y };
   }
-  // predominantly horizontal: leave via the right or the left edge
   return dx >= 0 ? { x: from.x + from.width, y: a.y } : { x: from.x, y: a.y };
 };
 
@@ -460,9 +480,15 @@ export const add_text = (
  */
 export const bind_arrow = (
   api: ExcalidrawImperativeAPI,
-  args: { source_id: string; target_id: string },
+  args: {
+    source_id: string;
+    target_id: string;
+    axis?: AnchorAxis;
+    /** Absolute bend points, from the layout engine's reserved corridors. */
+    waypoints?: { x: number; y: number }[];
+  },
 ) => {
-  const { source_id, target_id } = args;
+  const { source_id, target_id, axis, waypoints } = args;
 
   if (source_id === target_id) {
     throw new Error("source_id and target_id must be different elements.");
@@ -476,8 +502,11 @@ export const bind_arrow = (
   // centre produces a [0.5, 0.5] anchor and an arrow that starts inside the box
   // and crosses over it. Seeding on the outline yields boundary anchors
   // ([0.5, 1], [0, 0.5], ...) and a clean edge-to-edge arrow.
-  const from = edgeAnchor(source, target);
-  const to = edgeAnchor(target, source);
+  const route = waypoints ?? [];
+  // Aim the anchors at the first/last bend rather than at the far box, so a
+  // routed arrow leaves in the direction it is actually going.
+  const from = edgeAnchor(source, target, axis, route[0]);
+  const to = edgeAnchor(target, source, axis, route[route.length - 1]);
 
   const converted = convertToExcalidrawElements(
     [
@@ -495,6 +524,7 @@ export const bind_arrow = (
         // those defaults, so supplying points here wins.
         points: [
           [0, 0],
+          ...route.map((point) => [point.x - from.x, point.y - from.y]),
           [to.x - from.x, to.y - from.y],
         ],
         start: { id: source_id },
@@ -576,6 +606,191 @@ export const set_style = (
   commit(api, next);
 
   return { styled_ids: [...wanted], applied: patch };
+};
+
+export type DiagramShape = "rectangle" | "diamond" | "ellipse";
+
+/** Roughly how wide a box must be for its label not to wrap awkwardly. */
+const widthForLabel = (label: string, shape: DiagramShape) => {
+  const base = Math.max(180, Math.ceil(label.length * 9) + 48);
+  // A diamond only has its full width at the vertical midpoint, so text needs
+  // noticeably more room than the same label in a rectangle.
+  return shape === "diamond" ? Math.round(base * 1.5) : base;
+};
+
+const heightForShape = (shape: DiagramShape) =>
+  shape === "diamond" ? 110 : 80;
+
+/**
+ * ```json
+ * {
+ *   "name": "create_diagram",
+ *   "description": "Draw a whole diagram in one call from its STRUCTURE — the boxes and what connects to what — and let the layout engine decide the geometry. Use this for any request that means building a diagram or a subsystem, rather than adding boxes one at a time. Placing boxes individually cannot avoid arrows crossing them, because when each box is positioned the connections it will carry do not exist yet; this tool knows the whole graph up front, so it can rank the nodes, order them to minimise crossings, and route long arrows around whatever sits between. Keep add_rectangle and bind_arrow for small edits to a diagram that already exists.",
+ *   "input_schema": {
+ *     "type": "object",
+ *     "properties": {
+ *       "nodes": {
+ *         "type": "array",
+ *         "description": "Every box in the diagram.",
+ *         "items": {
+ *           "type": "object",
+ *           "properties": {
+ *             "key": { "type": "string", "description": "Short id used only to describe edges, e.g. \"db\". Not shown." },
+ *             "label": { "type": "string", "description": "Text shown in the box." },
+ *             "shape": { "type": "string", "enum": ["rectangle", "diamond", "ellipse"], "description": "rectangle for a service or store (default), diamond for a decision or branch, ellipse for a start or end point." }
+ *           },
+ *           "required": ["key", "label"]
+ *         }
+ *       },
+ *       "edges": {
+ *         "type": "array",
+ *         "description": "Connections, pointing from upstream to downstream.",
+ *         "items": {
+ *           "type": "object",
+ *           "properties": {
+ *             "from": { "type": "string", "description": "key of the source node." },
+ *             "to": { "type": "string", "description": "key of the target node." }
+ *           },
+ *           "required": ["from", "to"]
+ *         }
+ *       },
+ *       "direction": { "type": "string", "enum": ["TB", "LR"], "description": "TB (default) stacks the flow downward; LR runs it left to right. Prefer TB for architectures, LR for short pipelines." },
+ *       "replace": { "type": "boolean", "description": "true clears the canvas first. Use it when the user asks to start over or replace what is there." }
+ *     },
+ *     "required": ["nodes", "edges"]
+ *   }
+ * }
+ * ```
+ */
+export const create_diagram = (
+  api: ExcalidrawImperativeAPI,
+  args: {
+    nodes: { key: string; label: string; shape?: DiagramShape }[];
+    edges: { from: string; to: string }[];
+    direction?: "TB" | "LR";
+    replace?: boolean;
+  },
+) => {
+  const { nodes, edges = [], direction = "TB", replace = false } = args;
+
+  if (!Array.isArray(nodes) || nodes.length === 0) {
+    throw new Error("`nodes` must be a non-empty array.");
+  }
+
+  const seen = new Set<string>();
+  for (const node of nodes) {
+    if (!node?.key || !node?.label) {
+      throw new Error("Every node needs a `key` and a `label`.");
+    }
+    if (seen.has(node.key)) {
+      throw new Error(`Duplicate node key "${node.key}".`);
+    }
+    seen.add(node.key);
+  }
+  for (const edge of edges) {
+    for (const end of [edge?.from, edge?.to]) {
+      if (!seen.has(end)) {
+        throw new Error(
+          `Edge refers to unknown node key "${end}". Every edge must name keys from \`nodes\`.`,
+        );
+      }
+    }
+  }
+
+  const sized = nodes.map((node) => {
+    const shape = node.shape ?? "rectangle";
+    return {
+      ...node,
+      shape,
+      width: widthForLabel(node.label, shape),
+      height: heightForShape(shape),
+    };
+  });
+
+  // Start clear of anything already drawn, so a new diagram never lands on top
+  // of an old one.
+  const existing = replace ? [] : api.getSceneElements();
+  const lowestFree = existing.length
+    ? Math.max(...existing.map((el) => el.y + el.height)) + 120
+    : 120;
+
+  const { placements, routes } = layoutGraph(
+    sized.map(({ key, width, height }) => ({ key, width, height })),
+    edges,
+    { direction, originY: lowestFree },
+  );
+
+  const skeletons = sized.map((node) => {
+    const at = placements.get(node.key)!;
+    return {
+      type: node.shape,
+      x: at.x,
+      y: at.y,
+      width: node.width,
+      height: node.height,
+      roundness: { type: ROUNDNESS.ADAPTIVE_RADIUS },
+      fillStyle: "hachure",
+      label: { text: node.label },
+    };
+  });
+
+  const created = convertToExcalidrawElements(
+    skeletons as ExcalidrawElementSkeleton[],
+  );
+
+  const base = replace
+    ? api
+        .getSceneElementsIncludingDeleted()
+        .map((el) =>
+          el.isDeleted ? el : newElementWith(el, { isDeleted: true }),
+        )
+    : api.getSceneElementsIncludingDeleted();
+
+  commit(api, [...base, ...created]);
+
+  // Map layout keys to the ids the canvas actually assigned.
+  const idOf = new Map<string, string>();
+  const containers = created.filter((el) => el.type !== "text");
+  sized.forEach((node, index) => {
+    idOf.set(node.key, containers[index].id);
+  });
+
+  // The layout is layered, so every arrow leaves the bottom and enters the top
+  // (or right/left when LR). Letting each arrow pick its own dominant axis
+  // would send widely spaced pairs out sideways, straight across their
+  // neighbours.
+  const axis: AnchorAxis = direction === "TB" ? "vertical" : "horizontal";
+
+  let bound = 0;
+  const failures: string[] = [];
+  edges.forEach((edge, index) => {
+    try {
+      bind_arrow(api, {
+        source_id: idOf.get(edge.from)!,
+        target_id: idOf.get(edge.to)!,
+        axis,
+        waypoints: routes[index],
+      });
+      bound++;
+    } catch (error) {
+      failures.push(
+        `${edge.from}->${edge.to}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  });
+
+  return {
+    nodes: sized.map((node) => ({
+      key: node.key,
+      id: idOf.get(node.key),
+      label: node.label,
+      ...placements.get(node.key)!,
+    })),
+    arrows_bound: bound,
+    ...(failures.length ? { failed_edges: failures } : {}),
+  };
 };
 
 /**
@@ -685,6 +900,7 @@ export const TOOL_IMPLEMENTATIONS: Record<
   add_rectangle: (api, input) => add_rectangle(api, input),
   add_text: (api, input) => add_text(api, input),
   bind_arrow: (api, input) => bind_arrow(api, input),
+  create_diagram: (api, input) => create_diagram(api, input),
   set_style: (api, input) => set_style(api, input),
   remove_element: (api, input) => remove_element(api, input),
   teach_diagram: (api) => teach_diagram(api),
