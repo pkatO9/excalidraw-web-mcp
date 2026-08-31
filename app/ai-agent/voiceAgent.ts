@@ -92,6 +92,20 @@ export class VoiceAgent {
 
   private closing = false;
 
+  /**
+   * A single realtime response can contain several tool calls — the model
+   * called add_rectangle three times and bind_arrow four times within one
+   * response while building a diagram, confirmed by instrumenting the live
+   * socket. `response.create` must fire once per RESPONSE, not once per tool
+   * call: sending it immediately after every result races against the still-
+   * open response and the API answers with `conversation_already_has_active_
+   * response`. So a continuation is requested only after `response.done`,
+   * and only if a tool actually ran during that response.
+   */
+  private responseOpen = false;
+
+  private continuationPending = false;
+
   constructor(
     private readonly api: ExcalidrawImperativeAPI,
     private readonly baseUrl: string,
@@ -296,6 +310,7 @@ export class VoiceAgent {
         break;
 
       case "response.created":
+        this.responseOpen = true;
         this.events.onStatus("thinking");
         break;
 
@@ -316,6 +331,11 @@ export class VoiceAgent {
         break;
 
       case "response.done":
+        this.responseOpen = false;
+        if (this.continuationPending) {
+          this.continuationPending = false;
+          this.send({ type: "response.create" });
+        }
         this.events.onStatus("listening");
         break;
 
@@ -361,8 +381,15 @@ export class VoiceAgent {
           : `Error: ${outcome.error}`,
       },
     });
-    // The model does not continue on its own after a tool result.
-    this.send({ type: "response.create" });
+    // The model does not continue on its own after a tool result, but
+    // requesting the continuation now would race a still-open response if
+    // this was one of several tool calls in it. Fire immediately only when
+    // nothing is in flight; otherwise defer to response.done.
+    if (this.responseOpen) {
+      this.continuationPending = true;
+    } else {
+      this.send({ type: "response.create" });
+    }
   }
 }
 
