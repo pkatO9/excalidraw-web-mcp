@@ -89,8 +89,18 @@ const toWebMcpTool = (
  */
 const installShim = (): ModelContextLike => {
   const tools = new Map<string, WebMcpTool>();
-  const shim: ModelContextLike & { [SHIM_FLAG]?: true } = {
+  const shim: ModelContextLike & {
+    [SHIM_FLAG]?: true;
+    __tools?: WebMcpTool[];
+  } = {
     [SHIM_FLAG]: true,
+    // Shim-only. With a native implementation the browser brokers discovery
+    // and hands tools to whichever agent it trusts; with no browser in the
+    // middle, an in-page agent needs somewhere to read the manifest from.
+    // Deliberately not part of the spec surface.
+    get __tools() {
+      return [...tools.values()];
+    },
     provideContext: ({ tools: next }) => {
       tools.clear();
       for (const tool of next) {

@@ -26,6 +26,43 @@ coordinates arithmetically from the elements that already exist.
 └─────────────────────────────┘
 ```
 
+## WebMCP: the canvas is the tool provider
+
+Under [WebMCP](https://github.com/webmachinelearning/webmcp) the **page** declares what
+it can do through `navigator.modelContext`, and any agent the browser trusts can discover
+and invoke those tools. That inverts the usual arrangement, where a backend owns the tool
+list and a bespoke loop is its only caller.
+
+`app/ai-agent/webmcp/` is that surface:
+
+- **`descriptors.ts`** — the tool declarations, in WebMCP's shape (`inputSchema`). This is
+  the single source of truth, and it lives in the browser because that is where WebMCP
+  expects it: the definitions belong next to the code that runs them.
+- **`provider.ts`** — registers them with `navigator.modelContext` when the browser has
+  one, and installs a spec-shaped shim when it does not, so there is one code path either
+  way. `execute` is async and resolves to content blocks, as the spec requires; a failing
+  tool resolves with `isError` rather than rejecting, because an agent needs to read the
+  failure and try something else instead of having its turn aborted.
+
+**Our own agents are WebMCP clients.** The sidebar and the voice agent invoke tools
+through `callTool`, exactly as a third party would. That is deliberate: registering tools
+and then continuing to call the canvas directly would leave the WebMCP path exercised by
+nobody, and it would quietly rot. This way, if it breaks, the product breaks.
+
+The backend no longer owns the tool list either — the browser sends it with each request
+(`tools` on `/api/chat`, an `app.tools` announcement on the realtime socket). The server's
+bundled copy is a labelled fallback for a client too old to send one.
+
+The panel header reports `WebMCP · native · N tools` or `· shim ·`, so which is live is
+visible without devtools and a demo cannot imply native support it does not have. Chrome
+gates this behind `chrome://flags` → **enable-webmcp-testing**.
+
+`app/tests/aiExternalAgent.test.tsx` is the proof: it drives the canvas reaching **only**
+for `navigator.modelContext` — no tool-layer import, no `excalidrawAPI`, no knowledge that
+Excalidraw is involved. It discovers the vocabulary from the manifest, builds a diagram,
+reads ids back with `get_scene` to edit what it drew, and is told plainly when it asks for
+something impossible.
+
 ## Repository layout
 
 Upstream Excalidraw is **not vendored** here — `setup.sh` clones it and copies our
