@@ -162,6 +162,35 @@ Three decisions worth stating:
 - **Server-side VAD with `interrupt_response`** makes it hands-free and interruptible.
   Barge-in is most of what separates a live agent from a turn-based one.
 
+### Borrowing a stronger model when it matters
+
+`gpt-realtime-2` is tuned for low-latency conversation. On what was measured here —
+multi-step tool sequencing and the positional arithmetic — it matched the typed agent
+exactly. Where realtime models are generally weaker is sustained reasoning: a large
+one-shot build, a real design critique, a tradeoff with no obvious answer.
+
+Rather than move the whole session to a slower model to cover the minority of turns that
+need it, the agent has a **`think` tool** that hands just those turns to the chat
+deployment (`AZURE_OPENAI_THINK_DEPLOYMENT`, defaulting to `gpt-4.1`) and keeps talking
+at full speed the rest of the time. Measured behaviour:
+
+| Prompt | Tools called | Thought? |
+|---|---|---|
+| "Draw a box labelled Payments Service and one labelled Postgres, connect them" | `get_scene, add_rectangle ×2, bind_arrow` | no |
+| "40M events/day, Postgres melting — shard, CQRS, or a queue?" | `think` | yes, then answered |
+
+Three things make it work:
+
+- **It speaks before it thinks.** A single realtime response can carry both audio and a
+  tool call, so "let me think this through for a second" and the call happen in one turn
+  — the pause is explained rather than silent. The sidebar shows the step too.
+- **It is handled server-side and never reaches the browser.** The tool needs another
+  model, not the canvas, so routing it to the client would add a hop for nothing. The
+  server answers it and relays a custom `app.thinking` event purely for the transcript —
+  deliberately not a protocol event, so the browser can never answer the same call twice.
+- **It returns advice, not actions.** The realtime agent stays the only thing issuing
+  drawing tool calls, so canvas mutation keeps running through the browser as before.
+
 The voice agent deliberately does **not** get the `teach_diagram` tool: the tutor narrates
 through a separate mp3 pipeline, and two voices at once is never what anyone wants — a
 live agent explaining the diagram conversationally is the better answer anyway.

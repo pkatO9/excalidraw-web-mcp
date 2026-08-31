@@ -1,6 +1,7 @@
 import { WebSocketServer, WebSocket } from "ws";
 
 import { TOOL_SCHEMAS } from "./toolSchemas.js";
+import { runThink, THINK_TOOL, thinkDeployment } from "./thinkTool.js";
 import { toRealtimeTools, VOICE_SYSTEM_PROMPT } from "./voicePrompt.js";
 
 const API_VERSION =
@@ -87,9 +88,15 @@ export const attachRealtime = (httpServer) => {
             // start a lesson would put two voices on the canvas at once. A live
             // agent explaining the diagram conversationally is the better answer
             // here anyway — that is the whole point of talking to it.
-            tools: toRealtimeTools(
-              TOOL_SCHEMAS.filter((tool) => tool.name !== "teach_diagram"),
-            ),
+            tools: [
+              ...toRealtimeTools(
+                TOOL_SCHEMAS.filter((tool) => tool.name !== "teach_diagram"),
+              ),
+              // Handled here rather than in the browser: it needs no canvas
+              // access, only another model, so round-tripping it to the client
+              // would add a hop for nothing.
+              THINK_TOOL,
+            ],
             tool_choice: "auto",
           },
         }),
@@ -112,9 +119,92 @@ export const attachRealtime = (httpServer) => {
       }
     });
 
-    upstream.on("message", (data) => {
+    // `think` is intercepted here and answered by a second model; every other
+    // event is relayed untouched. Continuation is deferred the same way the
+    // browser defers its own: `response.create` may only be sent once the
+    // response that asked for the tool has closed, or the API rejects it with
+    // `conversation_already_has_active_response`.
+    let responseOpen = false;
+    let thinkContinuationPending = false;
+
+    const sendContinuationIfReady = () => {
+      if (!responseOpen && thinkContinuationPending) {
+        thinkContinuationPending = false;
+        upstream.send(JSON.stringify({ type: "response.create" }));
+      }
+    };
+
+    const answerThinkCall = async (message) => {
+      let question = "";
+      try {
+        question = JSON.parse(message.arguments ?? "{}").question ?? "";
+      } catch {
+        question = "";
+      }
+
+      // Surface it in the sidebar transcript. A custom type, deliberately not a
+      // realtime protocol event, so the browser shows it but never tries to run
+      // it as a canvas tool or answer the call a second time.
       if (client.readyState === WebSocket.OPEN) {
-        client.send(data.toString());
+        client.send(JSON.stringify({ type: "app.thinking", question }));
+      }
+
+      let output;
+      try {
+        output = await runThink(question);
+      } catch (error) {
+        console.error("[realtime think]", error.message);
+        output = `Error: ${error.message}`;
+      }
+
+      upstream.send(
+        JSON.stringify({
+          type: "conversation.item.create",
+          item: {
+            type: "function_call_output",
+            call_id: message.call_id,
+            output,
+          },
+        }),
+      );
+
+      // The answer can land before or after the asking response closes, so ask
+      // to continue through the same gate either way.
+      thinkContinuationPending = true;
+      sendContinuationIfReady();
+    };
+
+    upstream.on("message", (data) => {
+      const text = data.toString();
+
+      let message;
+      try {
+        message = JSON.parse(text);
+      } catch {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(text);
+        }
+        return;
+      }
+
+      if (message.type === "response.created") {
+        responseOpen = true;
+      }
+      if (message.type === "response.done") {
+        responseOpen = false;
+        sendContinuationIfReady();
+      }
+
+      if (
+        message.type === "response.function_call_arguments.done" &&
+        message.name === "think"
+      ) {
+        void answerThinkCall(message);
+        return;
+      }
+
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(text);
       }
     });
 
@@ -150,6 +240,6 @@ export const attachRealtime = (httpServer) => {
   });
 
   console.log(
-    `[excalidraw-web-mcp] realtime voice ready on /api/realtime (${DEPLOYMENT})`,
+    `[excalidraw-web-mcp] realtime voice ready on /api/realtime (${DEPLOYMENT}, think -> ${thinkDeployment()})`,
   );
 };

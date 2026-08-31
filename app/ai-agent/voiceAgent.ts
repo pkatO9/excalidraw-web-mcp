@@ -339,6 +339,23 @@ export class VoiceAgent {
         this.events.onStatus("listening");
         break;
 
+      // Not a realtime protocol event — the server emits this when it
+      // intercepts a `think` call, so the sidebar can show the pause for what
+      // it is rather than leaving a silent gap in the transcript.
+      case "app.thinking": {
+        const question = String(message.question ?? "");
+        this.events.onToolRun(
+          question
+            ? `thinking it through: “${
+                question.length > 90 ? `${question.slice(0, 90)}…` : question
+              }”`
+            : "thinking it through…",
+          false,
+        );
+        this.events.onStatus("thinking");
+        break;
+      }
+
       case "error":
         this.events.onError(
           message.error?.message ?? "The voice session hit an error.",

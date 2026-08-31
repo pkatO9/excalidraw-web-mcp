@@ -293,6 +293,38 @@ describe("VoiceAgent", () => {
     expect(events.onStatus).toHaveBeenLastCalledWith("listening");
   });
 
+  it("shows the thinking pause in the transcript without answering the call", async () => {
+    // `think` is handled entirely server-side — it needs another model, not the
+    // canvas. The server sends this custom event purely so the sidebar can show
+    // the pause; the browser must NOT treat it as a tool call, or it would
+    // answer a call_id the server has already answered.
+    const { socket } = await startAgent();
+    socket.sent.length = 0;
+
+    socket.emit({
+      type: "app.thinking",
+      question: "Should this use a queue or a direct write path?",
+    });
+
+    expect(events.onToolRun).toHaveBeenCalledWith(
+      expect.stringContaining("thinking it through"),
+      false,
+    );
+    expect(events.onStatus).toHaveBeenLastCalledWith("thinking");
+
+    // nothing went back over the socket — no output, no continuation
+    expect(socket.sent).toHaveLength(0);
+  });
+
+  it("truncates a long thinking question in the transcript", async () => {
+    const { socket } = await startAgent();
+    socket.emit({ type: "app.thinking", question: "x".repeat(200) });
+
+    const [[text]] = events.onToolRun.mock.calls.slice(-1);
+    expect(text.length).toBeLessThan(140);
+    expect(text).toContain("…");
+  });
+
   it("surfaces a server error to the caller", async () => {
     const { socket } = await startAgent();
     socket.emit({ type: "error", error: { message: "quota exceeded" } });
