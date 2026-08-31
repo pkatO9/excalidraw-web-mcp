@@ -6,7 +6,13 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { API_BASE } from "./config";
-import { executeTool, get_scene } from "./toolLayer";
+import { get_scene } from "./toolLayer";
+import {
+  callTool,
+  registerCanvasTools,
+  toolsForModel,
+  unregisterCanvasTools,
+} from "./webmcp/provider";
 import { TutorControls } from "./TutorControls";
 import { VoiceControls } from "./VoiceControls";
 import { useDictation } from "./useDictation";
@@ -101,6 +107,21 @@ export const AIChatSidebar = () => {
   const [busy, setBusy] = useState(false);
 
   const { references, dismiss, clear } = useSelectionReferences(excalidrawAPI);
+  const [provider, setProvider] = useState<{
+    mode: string;
+    count: number;
+  } | null>(null);
+
+  // Declare the canvas to the browser for as long as the editor is mounted, so
+  // an agent can discover it. Our own agents call the very same tools through
+  // `callTool`, which is what keeps this surface honest.
+  useEffect(() => {
+    if (!excalidrawAPI) {
+      return undefined;
+    }
+    setProvider(registerCanvasTools(excalidrawAPI));
+    return () => unregisterCanvasTools();
+  }, [excalidrawAPI]);
   const [referencesExpanded, setReferencesExpanded] = useState(false);
   const { onResizeStart, resetWidth } = useResizableSidebar();
   const { listening, speechSupported, toggleDictation, stopDictation } =
@@ -176,6 +197,10 @@ export const AIChatSidebar = () => {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             messages: history.current,
+            // The tool list travels with the request: the browser is the tool
+            // provider now, so the backend does not keep its own idea of what
+            // the canvas can do.
+            tools: toolsForModel(),
             ...(turn === 0
               ? {
                   scene,
@@ -199,28 +224,32 @@ export const AIChatSidebar = () => {
           return;
         }
 
-        const results = data.message.toolCalls.map(
-          (call: { id: string; name: string; input: unknown }) => {
-            const outcome = executeTool(excalidrawAPI, call.name, call.input);
+        // Sequential on purpose. The calls in one turn are usually ordered —
+        // create the shapes, then bind arrows between them — so running them
+        // concurrently would let a bind fire before its target exists.
+        const results = [];
+        for (const call of data.message.toolCalls as {
+          id: string;
+          name: string;
+          input: unknown;
+        }[]) {
+          const outcome = await callTool(call.name, call.input);
 
-            append({
-              kind: "tool",
-              text: outcome.ok
-                ? describeCall(call.name, call.input, outcome.result)
-                : `${call.name} failed: ${outcome.error}`,
-              failed: !outcome.ok,
-            });
+          append({
+            kind: "tool",
+            text: outcome.ok
+              ? describeCall(call.name, call.input, safeParse(outcome.result))
+              : `${call.name} failed: ${outcome.error}`,
+            failed: !outcome.ok,
+          });
 
-            return {
-              id: call.id,
-              name: call.name,
-              content: outcome.ok
-                ? JSON.stringify(outcome.result)
-                : `Error: ${outcome.error}`,
-              ...(outcome.ok ? {} : { isError: true }),
-            };
-          },
-        );
+          results.push({
+            id: call.id,
+            name: call.name,
+            content: outcome.ok ? outcome.result : `Error: ${outcome.error}`,
+            ...(outcome.ok ? {} : { isError: true }),
+          });
+        }
 
         history.current.push({ role: "tool", results });
       }
@@ -248,6 +277,18 @@ export const AIChatSidebar = () => {
     <Sidebar name={AI_SIDEBAR_NAME} docked>
       <Sidebar.Header>
         <div className="ai-chat__title">AI Diagram Agent</div>
+        {provider && (
+          <span
+            className={`ai-chat__webmcp ai-chat__webmcp--${provider.mode}`}
+            title={
+              provider.mode === "native"
+                ? "This browser implements navigator.modelContext; the canvas is registered with it and any agent can discover these tools."
+                : "This browser has no navigator.modelContext, so a spec-shaped shim is in use. Same code path, but only this page can see the tools."
+            }
+          >
+            WebMCP · {provider.mode} · {provider.count} tools
+          </span>
+        )}
       </Sidebar.Header>
 
       <div className="ai-chat">
@@ -444,6 +485,15 @@ export const AIChatToggle = () => {
       AI
     </button>
   );
+};
+
+/** Tool results cross the WebMCP boundary as text; parse for display only. */
+const safeParse = (text: string): any => {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
 };
 
 const describeCall = (name: string, input: any, result?: any): string => {

@@ -1,6 +1,11 @@
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 
-import { executeTool, get_scene } from "./toolLayer";
+import { get_scene } from "./toolLayer";
+import {
+  callTool,
+  registerCanvasTools,
+  toolsForModel,
+} from "./webmcp/provider";
 import { isTeaching, stopLesson } from "./tutorSession";
 
 /**
@@ -106,6 +111,19 @@ export class VoiceAgent {
 
   private continuationPending = false;
 
+  /**
+   * Tools run through the WebMCP surface, so they are async now. Two things
+   * follow. They must be serialised — the calls in one turn are usually
+   * ordered (create the shapes, then bind arrows between them), so running
+   * them concurrently would let a bind fire before its target exists. And
+   * `response.done` can now arrive while a tool is still running, so the
+   * continuation has to wait for BOTH the response to close and every tool to
+   * finish, or the agent would fall silent holding an unsent continuation.
+   */
+  private toolQueue: Promise<void> = Promise.resolve();
+
+  private toolsInFlight = 0;
+
   constructor(
     private readonly api: ExcalidrawImperativeAPI,
     private readonly baseUrl: string,
@@ -118,6 +136,11 @@ export class VoiceAgent {
     }
     this.closing = false;
     this.events.onStatus("connecting");
+
+    // Register defensively. The sidebar normally does this on mount, but the
+    // voice agent should not silently depend on that having happened —
+    // re-registering is idempotent.
+    registerCanvasTools(this.api);
 
     // The tutor narrates through a separate pipeline; two voices at once is
     // never what anyone wants.
@@ -147,6 +170,10 @@ export class VoiceAgent {
     this.socket = socket;
 
     socket.onopen = () => {
+      // The browser is the tool provider, so it tells the session what the
+      // canvas can do rather than the server assuming.
+      this.send({ type: "app.tools", tools: toolsForModel() });
+
       // Hand the agent the canvas as it stands, so its first sentence can be
       // about the actual diagram rather than a question about what is on screen.
       this.send({
@@ -332,10 +359,7 @@ export class VoiceAgent {
 
       case "response.done":
         this.responseOpen = false;
-        if (this.continuationPending) {
-          this.continuationPending = false;
-          this.send({ type: "response.create" });
-        }
+        this.continueIfReady();
         this.events.onStatus("listening");
         break;
 
@@ -367,6 +391,22 @@ export class VoiceAgent {
     }
   }
 
+  /**
+   * The model does not continue on its own after a tool result, but asking for
+   * the continuation too early is rejected with
+   * `conversation_already_has_active_response`. Ask only once the response
+   * that requested the tools has closed AND nothing is still running.
+   */
+  private continueIfReady() {
+    if (this.responseOpen || this.toolsInFlight > 0) {
+      return;
+    }
+    if (this.continuationPending) {
+      this.continuationPending = false;
+      this.send({ type: "response.create" });
+    }
+  }
+
   private runTool(message: {
     call_id: string;
     name: string;
@@ -379,34 +419,32 @@ export class VoiceAgent {
       input = {};
     }
 
-    const outcome = executeTool(this.api, message.name, input);
+    this.toolsInFlight++;
+    // Chain rather than fire-and-forget, so calls land in the order the model
+    // asked for them.
+    this.toolQueue = this.toolQueue.then(async () => {
+      const outcome = await callTool(message.name, input);
 
-    this.events.onToolRun(
-      outcome.ok
-        ? describeVoiceCall(message.name, input)
-        : `${message.name} failed: ${outcome.error}`,
-      !outcome.ok,
-    );
+      this.events.onToolRun(
+        outcome.ok
+          ? describeVoiceCall(message.name, input)
+          : `${message.name} failed: ${outcome.error}`,
+        !outcome.ok,
+      );
 
-    this.send({
-      type: "conversation.item.create",
-      item: {
-        type: "function_call_output",
-        call_id: message.call_id,
-        output: outcome.ok
-          ? JSON.stringify(outcome.result)
-          : `Error: ${outcome.error}`,
-      },
-    });
-    // The model does not continue on its own after a tool result, but
-    // requesting the continuation now would race a still-open response if
-    // this was one of several tool calls in it. Fire immediately only when
-    // nothing is in flight; otherwise defer to response.done.
-    if (this.responseOpen) {
+      this.send({
+        type: "conversation.item.create",
+        item: {
+          type: "function_call_output",
+          call_id: message.call_id,
+          output: outcome.ok ? outcome.result : `Error: ${outcome.error}`,
+        },
+      });
+
       this.continuationPending = true;
-    } else {
-      this.send({ type: "response.create" });
-    }
+      this.toolsInFlight--;
+      this.continueIfReady();
+    });
   }
 }
 

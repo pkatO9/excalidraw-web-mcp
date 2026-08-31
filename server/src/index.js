@@ -5,6 +5,7 @@ import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 
 import { attachRealtime } from "./realtime.js";
+import { resolveTools } from "./toolSchemas.js";
 import { formatReferences, formatSceneContext } from "./systemPrompt.js";
 import { runTutorLesson } from "./tutor.js";
 import { lessonRequestSchema } from "./tutorSchema.js";
@@ -121,7 +122,7 @@ app.post("/api/tutor/lesson", async (req, res) => {
  */
 app.post("/api/chat", async (req, res) => {
   try {
-    const { messages, provider, scene, references } = req.body ?? {};
+    const { messages, provider, scene, references, tools } = req.body ?? {};
 
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: "`messages` must be a non-empty array." });
@@ -160,7 +161,9 @@ app.post("/api/chat", async (req, res) => {
     }
 
     const { runTurn } = await load();
-    const result = await runTurn(prepared);
+    // The browser is the WebMCP tool provider, so it sends what the canvas can
+    // do. Falling back to the bundled list only covers a client too old to say.
+    const result = await runTurn(prepared, { tools: resolveTools(tools) });
     return res.json(result);
   } catch (error) {
     console.error("[/api/chat]", error);

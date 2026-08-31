@@ -100,6 +100,18 @@ const stubAudio = () => {
   (globalThis as any).URL.revokeObjectURL = vi.fn();
 };
 
+/**
+ * Tools now run through the WebMCP surface, so they are async and queued.
+ * Tests have to let the queue drain before asserting on what went back over
+ * the socket.
+ */
+const flushTools = async () => {
+  for (let i = 0; i < 6; i++) {
+    await Promise.resolve();
+  }
+  await new Promise((resolve) => setTimeout(resolve, 0));
+};
+
 describe("VoiceAgent", () => {
   let api: ExcalidrawImperativeAPI;
   let events: any;
@@ -158,6 +170,7 @@ describe("VoiceAgent", () => {
         label: "Database",
       }),
     });
+    await flushTools();
 
     // the canvas actually changed
     const scene = get_scene(api);
@@ -206,6 +219,7 @@ describe("VoiceAgent", () => {
         }),
       });
     }
+    await flushTools();
 
     // all three tool calls ran and their results went back
     expect(get_scene(api)).toHaveLength(3);
@@ -220,8 +234,43 @@ describe("VoiceAgent", () => {
     expect(socket.sentOfType("response.create")).toHaveLength(0);
 
     socket.emit({ type: "response.done" });
+    await flushTools();
 
     // exactly one continuation, sent only after the response actually closed
+    expect(socket.sentOfType("response.create")).toHaveLength(1);
+  });
+
+  it("waits for an in-flight tool before continuing, even if the response closes first", async () => {
+    // The hazard introduced by making tools async: response.done can now
+    // arrive while a tool is still running. Firing the continuation on
+    // response.done alone would send it before the result exists; skipping it
+    // would strand the turn and the agent would fall silent.
+    const { socket } = await startAgent();
+    socket.sent.length = 0;
+
+    socket.emit({ type: "response.created", response: { id: "resp_1" } });
+    socket.emit({
+      type: "response.function_call_arguments.done",
+      response_id: "resp_1",
+      call_id: "call_slow",
+      name: "add_rectangle",
+      arguments: JSON.stringify({
+        x: 0,
+        y: 0,
+        width: 180,
+        height: 80,
+        label: "Slow",
+      }),
+    });
+
+    // response closes before the tool has had a chance to resolve
+    socket.emit({ type: "response.done" });
+    await flushTools();
+
+    // the result still went back, and exactly one continuation followed it
+    const outputs = socket.sentOfType("conversation.item.create");
+    expect(outputs).toHaveLength(1);
+    expect(outputs[0].item.call_id).toBe("call_slow");
     expect(socket.sentOfType("response.create")).toHaveLength(1);
   });
 
@@ -237,6 +286,7 @@ describe("VoiceAgent", () => {
       name: "add_text",
       arguments: JSON.stringify({ x: 0, y: 0, text: "hi" }),
     });
+    await flushTools();
 
     expect(socket.sentOfType("response.create")).toHaveLength(1);
   });
@@ -251,6 +301,7 @@ describe("VoiceAgent", () => {
       name: "remove_element",
       arguments: JSON.stringify({ id: "does-not-exist" }),
     });
+    await flushTools();
 
     const output = socket.sentOfType("conversation.item.create")[0];
     expect(output.item.output).toMatch(/^Error:/);

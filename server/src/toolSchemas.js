@@ -217,6 +217,23 @@ export const TOOL_SCHEMAS = [
   },
 ];
 
+/**
+ * Accept the tool list the browser sent, or fall back to the bundled copy.
+ *
+ * The browser is the source of truth: it is the WebMCP provider, so it owns
+ * both the declarations and the code that runs them. This fallback exists only
+ * so an older client, or a probe that sends none, still gets a working turn —
+ * it is not a second definition anyone should edit.
+ */
+export const resolveTools = (fromClient) => {
+  if (Array.isArray(fromClient) && fromClient.length > 0) {
+    return fromClient.filter(
+      (tool) => tool && tool.name && tool.description && tool.input_schema,
+    );
+  }
+  return TOOL_SCHEMAS;
+};
+
 /** Azure OpenAI / OpenAI expect the same JSON Schema under a different envelope. */
 export const toOpenAITools = (schemas = TOOL_SCHEMAS) =>
   schemas.map((tool) => ({

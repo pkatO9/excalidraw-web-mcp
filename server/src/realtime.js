@@ -1,6 +1,6 @@
 import { WebSocketServer, WebSocket } from "ws";
 
-import { TOOL_SCHEMAS } from "./toolSchemas.js";
+import { resolveTools, TOOL_SCHEMAS } from "./toolSchemas.js";
 import { runThink, THINK_TOOL, thinkDeployment } from "./thinkTool.js";
 import { toRealtimeTools, VOICE_SYSTEM_PROMPT } from "./voicePrompt.js";
 
@@ -25,7 +25,10 @@ const VOICE = process.env.AZURE_OPENAI_REALTIME_VOICE || "alloy";
  * function calls in the same stream.
  */
 export const attachRealtime = (httpServer) => {
-  const wss = new WebSocketServer({ server: httpServer, path: "/api/realtime" });
+  const wss = new WebSocketServer({
+    server: httpServer,
+    path: "/api/realtime",
+  });
 
   wss.on("connection", (client) => {
     const endpoint = process.env.AZURE_OPENAI_ENDPOINT;
@@ -47,7 +50,10 @@ export const attachRealtime = (httpServer) => {
 
     const url = `${endpoint
       .replace(/^https:/, "wss:")
-      .replace(/\/$/, "")}/openai/realtime?api-version=${API_VERSION}&deployment=${DEPLOYMENT}`;
+      .replace(
+        /\/$/,
+        "",
+      )}/openai/realtime?api-version=${API_VERSION}&deployment=${DEPLOYMENT}`;
 
     const upstream = new WebSocket(url, { headers: { "api-key": apiKey } });
 
@@ -55,9 +61,30 @@ export const attachRealtime = (httpServer) => {
     // so hold it rather than losing the opening moments of speech.
     const pending = [];
     let upstreamReady = false;
+    let sessionConfigured = false;
+    let clientTools = null;
+    // Do not hold the session hostage to an announcement that may never come.
+    const toolWait = setTimeout(() => configureSession(), 1500);
 
     upstream.on("open", () => {
       upstreamReady = true;
+      configureSession();
+    });
+
+    /**
+     * Configure the session once the upstream is open and the tool list is
+     * known. Whichever arrives second triggers it; a short timer covers a
+     * client that never announces, so an older build still gets a working
+     * session rather than a silent one.
+     */
+    function configureSession() {
+      if (!upstreamReady || sessionConfigured) {
+        return;
+      }
+      sessionConfigured = true;
+      clearTimeout(toolWait);
+
+      const canvasTools = clientTools ?? TOOL_SCHEMAS;
 
       upstream.send(
         JSON.stringify({
@@ -90,7 +117,7 @@ export const attachRealtime = (httpServer) => {
             // here anyway — that is the whole point of talking to it.
             tools: [
               ...toRealtimeTools(
-                TOOL_SCHEMAS.filter((tool) => tool.name !== "teach_diagram"),
+                canvasTools.filter((tool) => tool.name !== "teach_diagram"),
               ),
               // Handled here rather than in the browser: it needs no canvas
               // access, only another model, so round-tripping it to the client
@@ -105,13 +132,28 @@ export const attachRealtime = (httpServer) => {
       for (const message of pending.splice(0)) {
         upstream.send(message);
       }
-    });
+    }
 
     // `ws` hands us Buffers. Relaying one verbatim sends a BINARY frame, which
     // the realtime API rejects outright ("binary frames are not supported") —
     // so both directions are coerced to text.
     client.on("message", (data) => {
       const text = data.toString();
+
+      // The browser announces what the canvas can do as its first message,
+      // because it — not this server — is the WebMCP tool provider. That is
+      // ours to act on, so it never goes upstream.
+      try {
+        const announced = JSON.parse(text);
+        if (announced?.type === "app.tools") {
+          clientTools = resolveTools(announced.tools);
+          configureSession();
+          return;
+        }
+      } catch {
+        // not JSON we care about; fall through and relay
+      }
+
       if (upstreamReady && upstream.readyState === WebSocket.OPEN) {
         upstream.send(text);
       } else {
@@ -209,6 +251,7 @@ export const attachRealtime = (httpServer) => {
     });
 
     const closeBoth = () => {
+      clearTimeout(toolWait);
       if (client.readyState === WebSocket.OPEN) {
         client.close();
       }
