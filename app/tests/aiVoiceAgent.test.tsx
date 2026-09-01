@@ -376,6 +376,49 @@ describe("VoiceAgent", () => {
     expect(text).toContain("…");
   });
 
+  it("hangs up after a minute of silence so an idle session stops billing", async () => {
+    vi.useFakeTimers();
+    try {
+      const { socket } = await startAgent();
+      expect(socket.readyState).toBe(1);
+
+      // just under the limit, still live
+      vi.advanceTimersByTime(59_000);
+      expect(events.onStatus).not.toHaveBeenCalledWith("idle");
+
+      vi.advanceTimersByTime(2_000);
+
+      expect(events.onError).toHaveBeenCalledWith(
+        expect.stringContaining("minute of silence"),
+      );
+      expect(events.onStatus).toHaveBeenLastCalledWith("idle");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("speaking resets the silence countdown", async () => {
+    vi.useFakeTimers();
+    try {
+      const { socket } = await startAgent();
+
+      vi.advanceTimersByTime(50_000);
+      socket.emit({ type: "input_audio_buffer.speech_started" });
+      vi.advanceTimersByTime(50_000); // 100s total, but only 50s since speech
+
+      expect(events.onError).not.toHaveBeenCalledWith(
+        expect.stringContaining("minute of silence"),
+      );
+
+      vi.advanceTimersByTime(15_000);
+      expect(events.onError).toHaveBeenCalledWith(
+        expect.stringContaining("minute of silence"),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("surfaces a server error to the caller", async () => {
     const { socket } = await startAgent();
     socket.emit({ type: "error", error: { message: "quota exceeded" } });

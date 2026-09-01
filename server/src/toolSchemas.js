@@ -85,9 +85,9 @@ export const TOOL_SCHEMAS = [
     },
   },
   {
-    name: "add_rectangle",
+    name: "add_shape",
     description:
-      "Add a labelled rectangle. x/y are the top-left corner. Use this for every box in an architecture diagram (services, load balancers, databases, caches). Collision is handled for you: if the spot you ask for is taken, the box is placed at the nearest free position instead and the response tells you where it actually landed — so boxes can never overlap. ALWAYS use the x/y in the response, not the ones you requested, when positioning anything relative to this box. Returns the new element's id, which you need for bind_arrow.",
+      "Add a single labelled shape. x/y are the top-left corner. Use this for every box in an architecture diagram (services, load balancers, databases, caches). Collision is handled for you: if the spot you ask for is taken, the box is placed at the nearest free position instead and the response tells you where it actually landed — so boxes can never overlap. ALWAYS use the x/y in the response, not the ones you requested, when positioning anything relative to this box. Returns the new element's id, which you need for bind_arrow.",
     input_schema: {
       type: "object",
       properties: {
@@ -103,7 +103,13 @@ export const TOOL_SCHEMAS = [
         },
         label: {
           type: "string",
-          description: "Text shown centred inside the rectangle.",
+          description: "Text shown centred inside the shape.",
+        },
+        shape: {
+          type: "string",
+          enum: ["rectangle", "diamond", "ellipse"],
+          description:
+            "rectangle for a service, component or store (the default); diamond for a decision or branch; ellipse for a start or end point.",
         },
         backgroundColor: {
           type: "string",

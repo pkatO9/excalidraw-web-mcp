@@ -17,10 +17,18 @@ import { AzureOpenAI } from "openai";
  * running through the browser exactly as before.
  */
 
+// gpt-5.6-sol, measured against gpt-4.1, gpt-5.4-mini and its luna/terra
+// siblings on a real question from this app. It gave the most complete answer
+// while staying compact enough to speak aloud — it named the tradeoff and when
+// each option applies, rather than just picking one. It costs about 6.5s versus
+// gpt-4.1's 2s, which is acceptable because the agent says "let me think this
+// through" before calling it and only calls it on genuinely hard turns.
+// Deliberately does NOT fall back to AZURE_OPENAI_DEPLOYMENT. Falling back to
+// the chat model would silently defeat the point of the tool — the whole reason
+// it exists is to reach for something stronger than the model already in the
+// loop. Set AZURE_OPENAI_THINK_DEPLOYMENT to override.
 const DEPLOYMENT =
-  process.env.AZURE_OPENAI_THINK_DEPLOYMENT ||
-  process.env.AZURE_OPENAI_DEPLOYMENT ||
-  "gpt-4.1";
+  process.env.AZURE_OPENAI_THINK_DEPLOYMENT || "gpt-5.6-sol";
 const API_VERSION = process.env.AZURE_OPENAI_API_VERSION || "2024-10-21";
 const THINK_TIMEOUT_MS = 30000;
 
@@ -73,24 +81,51 @@ Give it something it can act on immediately:
 - If the question is a review, name concrete problems and what to do about each. No generic advice.`;
 
 /** Question -> considered answer, as plain text. */
+/**
+ * Question -> considered answer, as plain text.
+ *
+ * The parameter shape differs by model generation and this is configurable, so
+ * both are attempted rather than assumed: the gpt-5.x models reject
+ * `max_tokens` and `temperature` outright and want `max_completion_tokens`,
+ * while gpt-4.x accepts the older pair. Hard-coding either would break the
+ * moment someone points AZURE_OPENAI_THINK_DEPLOYMENT at the other generation.
+ */
 export const runThink = async (question) => {
-  const response = await getClient().chat.completions.create(
-    {
-      model: DEPLOYMENT,
-      max_tokens: 700,
-      temperature: 0.2,
-      messages: [
-        { role: "system", content: THINK_SYSTEM_PROMPT },
-        { role: "user", content: question },
-      ],
-    },
-    { timeout: THINK_TIMEOUT_MS },
-  );
+  const messages = [
+    { role: "system", content: THINK_SYSTEM_PROMPT },
+    { role: "user", content: question },
+  ];
 
-  return (
-    response.choices[0]?.message?.content?.trim() ||
-    "No useful answer came back — use your own judgement."
-  );
+  const shapes = [
+    { model: DEPLOYMENT, max_completion_tokens: 700, messages },
+    { model: DEPLOYMENT, max_tokens: 700, temperature: 0.2, messages },
+  ];
+
+  let lastError;
+  for (const params of shapes) {
+    try {
+      const response = await getClient().chat.completions.create(params, {
+        timeout: THINK_TIMEOUT_MS,
+      });
+      const answer = response.choices[0]?.message?.content?.trim();
+      if (answer) {
+        return answer;
+      }
+      return "No useful answer came back — use your own judgement.";
+    } catch (error) {
+      // Only a rejected parameter is worth retrying with the other shape; a
+      // real failure (auth, quota, timeout) will fail the same way twice and
+      // is surfaced below.
+      lastError = error;
+      if (!/unsupported|unrecognized|not supported|max_tokens|temperature/i.test(
+        error?.message ?? "",
+      )) {
+        break;
+      }
+    }
+  }
+
+  throw lastError ?? new Error("The think request failed.");
 };
 
 export const thinkDeployment = () => DEPLOYMENT;

@@ -127,14 +127,14 @@ actually sent to the model lives in `server/src/toolSchemas.js`.
 | Tool | What it does |
 |---|---|
 | `get_scene()` | Returns every visible element as plain JSON — `id`, `type`, `x`, `y`, `width`, `height`, `label`, plus what each arrow is bound to. |
-| `add_rectangle(x, y, width, height, label)` | Labelled rectangle at exact coordinates. Returns the new id. |
+| `add_shape(x, y, width, height, label)` | Labelled rectangle at exact coordinates. Returns the new id. |
 | `add_text(x, y, text)` | Standalone text element for titles and notes. |
 | `bind_arrow(source_id, target_id)` | Arrow between two existing elements using Excalidraw's **native binding**, so it snaps to shape edges and follows them when moved. |
 | `set_style(ids[], backgroundColor?, strokeColor?, fillStyle?)` | Recolours elements **already on the canvas**, in place. |
 | `remove_element(id)` | Deletes an element, its label, and any arrows bound to it. |
 | `teach_diagram()` | Starts a spoken walkthrough of the canvas (see [the tutor](#the-agentic-tutor)). Returns when the lesson *starts*, not when it ends. |
 
-`add_rectangle` also takes optional `backgroundColor` / `strokeColor` / `fillStyle`.
+`add_shape` also takes optional `backgroundColor` / `strokeColor` / `fillStyle`.
 
 **House style.** Every box is created with **rounded corners**
 (`roundness: ROUNDNESS.ADAPTIVE_RADIUS`) and a **`hachure`** fill — the single-line
@@ -183,12 +183,12 @@ adding one box beside another, connecting two elements, recolouring.
 
 ## Overlap is prevented by the tool layer, not the prompt
 
-`add_rectangle` resolves a **non-overlapping position before creating anything**. If the
+`add_shape` resolves a **non-overlapping position before creating anything**. If the
 requested spot is taken it searches outward on a 20px grid and takes the nearest opening
 (40px minimum clearance), then reports where the box actually landed.
 
 This has to live in the tool layer rather than the system prompt. The model issues a
-whole batch of `add_rectangle` calls in a single turn, so it cannot see any of them
+whole batch of `add_shape` calls in a single turn, so it cannot see any of them
 before choosing coordinates — asking it to collision-check a canvas with thirty elements
 is asking it to do the one thing it is worst at. Making the tool hold the invariant means
 it holds at any scale, deterministically. It matches what the MCP survey found: the tool
@@ -251,7 +251,7 @@ at full speed the rest of the time. Measured behaviour:
 
 | Prompt | Tools called | Thought? |
 |---|---|---|
-| "Draw a box labelled Payments Service and one labelled Postgres, connect them" | `get_scene, add_rectangle ×2, bind_arrow` | no |
+| "Draw a box labelled Payments Service and one labelled Postgres, connect them" | `get_scene, add_shape ×2, bind_arrow` | no |
 | "40M events/day, Postgres melting — shard, CQRS, or a queue?" | `think` | yes, then answered |
 
 Three things make it work:
@@ -294,6 +294,13 @@ of them. Collapsing is purely visual: **every** selected element is still sent a
 reference, and the transcript echo summarises as "A, B, C and 27 more". They are snapshotted at send time, so they stay correct
 while the agent redraws the canvas. The system prompt tells the model to resolve
 "this"/"these"/"it" to those ids and never to guess from labels.
+
+## Voice hangs up after a minute of silence
+
+An open realtime session bills for streamed audio whether or not anyone is talking, so a
+tab left on a forgotten canvas would quietly run a meter. The session closes after 60s
+with no activity — speaking, replying and running a tool all reset the clock, so it only
+fires when genuinely nothing is happening.
 
 ## Dictation
 
@@ -385,7 +392,7 @@ so every element of a tier matches automatically with nothing required from the 
 | Arrow | takes the colour of the box it leaves, so a flow reads as one thread |
 | Fill | `solid` — hachure muddies a pale fill until the border stops reading |
 
-`add_rectangle` has no layer to go by, so it borrows the nearest already-coloured box:
+`add_shape` has no layer to go by, so it borrows the nearest already-coloured box:
 adding a cache beside a teal database gives a teal cache, not a blue one. With nothing to
 inherit it still picks a real colour rather than defaulting to black.
 
@@ -434,7 +441,7 @@ Concrete learnings, and what this project does with each:
 | Modern Excalidraw binds with **`fixedPoint` + `mode: "orbit"`**, *not* the legacy `focus`/`gap`. A binding looks like `{ elementId, mode: "orbit", fixedPoint: [1.0, 0.5] }`. | Confirmed against the vendored source. `bind_arrow` now produces boundary `fixedPoint`s. |
 | Anchors must sit **on the shape boundary** so arrows meet edges based on relative position. | `edgeAnchor()` picks bottom/top/left/right from the dominant axis between centres. |
 | A **binding integrity engine** keeps arrow↔shape references bidirectional and repairs orphans after each mutation. | `convertToExcalidrawElements` maintains `boundElements` both ways; `remove_element` deletes arrows bound to a removed shape so nothing dangles. |
-| **Overlap detection** belongs in the tool layer, not the prompt. | `add_rectangle` returns a `warning` naming the elements it collides with, so the agent self-corrects. |
+| **Overlap detection** belongs in the tool layer, not the prompt. | `add_shape` returns a `warning` naming the elements it collides with, so the agent self-corrects. |
 | **Text measurement** (over-estimated ~15%) stops labels clipping. | Not adopted — Excalidraw measures bound text itself on the client, so the container grows natively. Noted as a next-pass item if labels ever clip. |
 | Some servers own layout entirely via a **graph layout algorithm** (the model supplies only structure). | Deliberately *not* adopted: this project's brief requires the model to compute positions arithmetically from `get_scene`. The tool layer owns pixel-accuracy (edges, bindings, overlap reporting); the model owns semantics and layout. |
 

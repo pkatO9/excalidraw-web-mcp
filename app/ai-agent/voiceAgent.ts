@@ -21,6 +21,16 @@ import { isTeaching, stopLesson } from "./tutorSession";
  */
 const SAMPLE_RATE = 24000;
 
+/**
+ * Hang up after this long with nobody speaking.
+ *
+ * An open session bills for streamed audio whether or not anyone is talking, so
+ * a tab left open on a forgotten canvas would quietly run a meter. One minute
+ * is long enough to think mid-sentence without being cut off, and short enough
+ * that walking away costs almost nothing.
+ */
+const IDLE_TIMEOUT_MS = 60_000;
+
 /** Emitted upward so the sidebar can render conversation and status. */
 export type VoiceEvents = {
   onStatus: (status: VoiceStatus) => void;
@@ -124,6 +134,8 @@ export class VoiceAgent {
 
   private toolsInFlight = 0;
 
+  private idleTimer: ReturnType<typeof setTimeout> | null = null;
+
   constructor(
     private readonly api: ExcalidrawImperativeAPI,
     private readonly baseUrl: string,
@@ -193,6 +205,7 @@ export class VoiceAgent {
       });
       void this.startCapture();
       this.events.onStatus("listening");
+      this.touch();
     };
 
     socket.onmessage = (event) => this.handleEvent(JSON.parse(event.data));
@@ -215,6 +228,11 @@ export class VoiceAgent {
   stop() {
     this.closing = true;
 
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
+
     this.stopPlayback();
 
     this.captureContext?.close().catch(() => {});
@@ -230,6 +248,26 @@ export class VoiceAgent {
     this.socket = null;
 
     this.events.onStatus("idle");
+  }
+
+  /**
+   * Restart the idle countdown. Called on anything that counts as activity —
+   * the user speaking, the agent replying, a tool running — so the session only
+   * closes when genuinely nothing is happening.
+   */
+  private touch() {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+    }
+    if (this.closing) {
+      return;
+    }
+    this.idleTimer = setTimeout(() => {
+      this.events.onError(
+        "Voice ended after a minute of silence, so it is not left running. Press Talk to start again.",
+      );
+      this.stop();
+    }, IDLE_TIMEOUT_MS);
   }
 
   private send(payload: unknown) {
@@ -324,6 +362,7 @@ export class VoiceAgent {
   private handleEvent(message: any) {
     switch (message.type) {
       case "input_audio_buffer.speech_started":
+        this.touch();
         // Barge-in: the server cancels its response, we drop what is already
         // queued locally so the agent goes quiet immediately rather than
         // finishing the sentence it had buffered.
@@ -337,6 +376,7 @@ export class VoiceAgent {
         break;
 
       case "response.created":
+        this.touch();
         this.responseOpen = true;
         this.events.onStatus("thinking");
         break;

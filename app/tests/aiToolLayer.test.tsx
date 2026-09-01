@@ -9,6 +9,7 @@ import { TIER_PALETTE } from "../ai-agent/palette";
 import {
   add_rectangle,
   add_text,
+  add_shape,
   bind_arrow,
   create_diagram,
   executeTool,
@@ -517,6 +518,69 @@ describe("AI agent tool layer", () => {
     expectNoOverlaps(get_scene(api));
     // the old box survives when replace is not asked for
     expect(get_scene(api).some((el) => el.id === existing.id)).toBe(true);
+  });
+
+  it("add_shape can add a single diamond or ellipse, not just a rectangle", () => {
+    // The gap this closes: the agent could only make diamonds through
+    // create_diagram, so "add a decision diamond next to the API server" was
+    // impossible as a small edit and it correctly said so.
+    const diamond = add_shape(api, {
+      x: 200,
+      y: 200,
+      width: 220,
+      height: 110,
+      label: "Valid?",
+      shape: "diamond",
+    });
+    const ellipse = add_shape(api, {
+      x: 600,
+      y: 200,
+      width: 180,
+      height: 80,
+      label: "Start",
+      shape: "ellipse",
+    });
+    const box = add_shape(api, {
+      x: 1000,
+      y: 200,
+      width: 180,
+      height: 80,
+      label: "Service",
+    });
+
+    const typeOf = (id: string) =>
+      api.getSceneElements().find((e) => e.id === id)!.type;
+
+    expect(typeOf(diamond.id)).toBe("diamond");
+    expect(typeOf(ellipse.id)).toBe("ellipse");
+    expect(typeOf(box.id)).toBe("rectangle"); // still the default
+  });
+
+  it("a diamond added on its own can be connected like any other shape", () => {
+    const api_server = add_shape(api, {
+      x: 200,
+      y: 0,
+      width: 180,
+      height: 80,
+      label: "API Server",
+    });
+    const decision = add_shape(api, {
+      x: 200,
+      y: 300,
+      width: 220,
+      height: 110,
+      label: "Authorised?",
+      shape: "diamond",
+    });
+
+    const arrow = bind_arrow(api, {
+      source_id: api_server.id,
+      target_id: decision.id,
+    });
+    const el: any = api.getSceneElements().find((e) => e.id === arrow.id);
+
+    expect(el.startBinding?.elementId).toBe(api_server.id);
+    expect(el.endBinding?.elementId).toBe(decision.id);
   });
 
   it("draws curved arrows, not sharp or elbowed ones", () => {

@@ -45,14 +45,13 @@ describe("THINK_TOOL", () => {
     assert.match(THINK_TOOL.description, /do NOT use it for ordinary drawing/i);
   });
 
-  it("defaults to the chat deployment when no think deployment is set", () => {
-    // Reuses a model already proven on this workload rather than guessing at
-    // an unfamiliar one; AZURE_OPENAI_THINK_DEPLOYMENT overrides it.
+  it("never silently falls back to the chat deployment", () => {
+    // Falling back to the model already in the loop would defeat the point of
+    // the tool, which exists to reach for something stronger. Only an explicit
+    // AZURE_OPENAI_THINK_DEPLOYMENT overrides the reasoning default.
     assert.equal(
       thinkDeployment(),
-      process.env.AZURE_OPENAI_THINK_DEPLOYMENT ||
-        process.env.AZURE_OPENAI_DEPLOYMENT ||
-        "gpt-4.1",
+      process.env.AZURE_OPENAI_THINK_DEPLOYMENT || "gpt-5.6-sol",
     );
   });
 });

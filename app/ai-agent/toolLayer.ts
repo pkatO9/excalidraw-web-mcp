@@ -57,6 +57,7 @@ export type SceneElementSummary = {
 export type ToolName =
   | "get_scene"
   | "add_rectangle"
+  | "add_shape"
   | "add_text"
   | "bind_arrow"
   | "create_diagram"
@@ -358,9 +359,10 @@ export const add_rectangle = (
     width: number;
     height: number;
     label?: string;
+    shape?: DiagramShape;
   } & ElementStyle,
 ) => {
-  const { width, height, label, ...style } = args;
+  const { width, height, label, shape = "rectangle", ...style } = args;
 
   // Resolve a non-overlapping position before creating anything, so the
   // invariant holds even when the model fires a whole batch of adds at once.
@@ -393,7 +395,7 @@ export const add_rectangle = (
 
   const created = convertToExcalidrawElements([
     {
-      type: "rectangle",
+      type: shape,
       x,
       y,
       width,
@@ -414,7 +416,7 @@ export const add_rectangle = (
 
   commit(api, [...api.getSceneElementsIncludingDeleted(), ...created]);
 
-  const container = created.find((el) => el.type === "rectangle")!;
+  const container = created.find((el) => el.type === shape)!;
 
   return {
     id: container.id,
@@ -949,6 +951,12 @@ export const remove_element = (
 export const teach_diagram = (api: ExcalidrawImperativeAPI) =>
   startLesson(api, () => get_scene(api));
 
+/**
+ * `add_shape` is the name the model sees; `add_rectangle` stays as an alias so
+ * anything already calling it keeps working.
+ */
+export const add_shape = add_rectangle;
+
 /** Dispatch table used by the chat sidebar to run whatever the model asked for. */
 export const TOOL_IMPLEMENTATIONS: Record<
   ToolName,
@@ -956,6 +964,7 @@ export const TOOL_IMPLEMENTATIONS: Record<
 > = {
   get_scene: (api) => get_scene(api),
   add_rectangle: (api, input) => add_rectangle(api, input),
+  add_shape: (api, input) => add_shape(api, input),
   add_text: (api, input) => add_text(api, input),
   bind_arrow: (api, input) => bind_arrow(api, input),
   create_diagram: (api, input) => create_diagram(api, input),
