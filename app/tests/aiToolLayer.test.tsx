@@ -4,6 +4,8 @@ import { render } from "@excalidraw/excalidraw/tests/test-utils";
 
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 
+import { TIER_PALETTE } from "../ai-agent/palette";
+
 import {
   add_rectangle,
   add_text,
@@ -392,6 +394,80 @@ describe("AI agent tool layer", () => {
     }
   });
 
+  it("create_diagram colours by tier, so a layer reads as one group", () => {
+    const result = create_diagram(api, {
+      nodes: [
+        { key: "rider", label: "Rider App" },
+        { key: "driver", label: "Driver App" },
+        { key: "gateway", label: "API Gateway" },
+        { key: "trips", label: "Trip Service" },
+        { key: "db", label: "Database" },
+      ],
+      edges: [
+        { from: "rider", to: "gateway" },
+        { from: "driver", to: "gateway" },
+        { from: "gateway", to: "trips" },
+        { from: "trips", to: "db" },
+      ],
+    });
+
+    const raw = api.getSceneElements();
+    const elFor = (key: string) =>
+      raw.find((e) => e.id === result.nodes.find((n) => n.key === key)!.id)!;
+
+    // same layer, same colour — without the model saying anything
+    expect(elFor("rider").strokeColor).toBe(elFor("driver").strokeColor);
+    expect(elFor("rider").backgroundColor).toBe(
+      elFor("driver").backgroundColor,
+    );
+
+    // consecutive tiers are visibly different
+    const tiers = ["rider", "gateway", "trips", "db"].map(
+      (key) => elFor(key).strokeColor,
+    );
+    expect(new Set(tiers).size).toBe(4);
+
+    // nothing is black, and every fill is solid so the border reads
+    for (const key of ["rider", "gateway", "trips", "db"]) {
+      const el = elFor(key);
+      expect(el.strokeColor).not.toBe("#1e1e1e");
+      expect(el.backgroundColor).not.toBe("transparent");
+      expect(el.fillStyle).toBe("solid");
+    }
+
+    // labels take the border colour instead of staying near-black
+    for (const key of ["rider", "gateway", "db"]) {
+      const box = elFor(key);
+      const label: any = raw.find(
+        (e) => e.type === "text" && e.containerId === box.id,
+      );
+      expect(label.strokeColor).toBe(box.strokeColor);
+    }
+
+    // arrows take the colour of the box they leave
+    const arrows = raw.filter((e) => e.type === "arrow") as any[];
+    const fromRider = arrows.find(
+      (a) => a.startBinding?.elementId === elFor("rider").id,
+    );
+    expect(fromRider.strokeColor).toBe(elFor("rider").strokeColor);
+  });
+
+  it("an explicit colour on a node still overrides its tier", () => {
+    const result = create_diagram(api, {
+      nodes: [
+        { key: "a", label: "A" },
+        { key: "b", label: "Special", strokeColor: "#e03131" },
+      ],
+      edges: [{ from: "a", to: "b" }],
+    });
+
+    const raw = api.getSceneElements();
+    const special = raw.find(
+      (e) => e.id === result.nodes.find((n) => n.key === "b")!.id,
+    )!;
+    expect(special.strokeColor).toBe("#e03131");
+  });
+
   it("create_diagram supports diamonds and ellipses", () => {
     const result = create_diagram(api, {
       nodes: [
@@ -456,7 +532,7 @@ describe("AI agent tool layer", () => {
     ).toThrow(/does not exist/);
   });
 
-  it("leaves a diagram uncoloured unless colours are asked for", () => {
+  it("never produces a black box — colour is the default, not opt-in", () => {
     const box = add_rectangle(api, {
       x: 0,
       y: 0,
@@ -466,17 +542,46 @@ describe("AI agent tool layer", () => {
     });
     const el: any = api.getSceneElements().find((e) => e.id === box.id);
 
-    expect(el.backgroundColor).toBe("transparent");
-    expect(el.strokeColor).toBe("#1e1e1e");
+    expect(el.backgroundColor).not.toBe("transparent");
+    expect(el.strokeColor).not.toBe("#1e1e1e");
+    expect(el.strokeColor).toBe(TIER_PALETTE[0].strokeColor);
 
-    // house style: rounded corners and a single-line hachure fill
+    // house style: rounded corners, solid fill so the border still reads
     expect(el.roundness).toEqual({ type: 3 }); // ROUNDNESS.ADAPTIVE_RADIUS
-    expect(el.fillStyle).toBe("hachure");
+    expect(el.fillStyle).toBe("solid");
 
-    // and an unstyled element reports no colour, keeping get_scene terse
-    const summary = get_scene(api).find((e) => e.id === box.id)!;
-    expect(summary.backgroundColor).toBeUndefined();
-    expect(summary.strokeColor).toBeUndefined();
+    // the bound label matches the border rather than staying near-black,
+    // which is what made coloured boxes still look like black components
+    const labelEl: any = api
+      .getSceneElements()
+      .find((e) => e.type === "text" && e.containerId === box.id);
+    expect(labelEl.strokeColor).toBe(el.strokeColor);
+  });
+
+  it("a new box borrows the colour of the nearest coloured one", () => {
+    // Extending a diagram should stay coherent: a cache added beside a teal
+    // database should not come out blue.
+    const teal = TIER_PALETTE.find((tier) => tier.name === "teal")!;
+    add_rectangle(api, {
+      x: 0,
+      y: 0,
+      width: 180,
+      height: 80,
+      label: "Database",
+      strokeColor: teal.strokeColor,
+      backgroundColor: teal.backgroundColor,
+    });
+
+    const cache = add_rectangle(api, {
+      x: 400,
+      y: 0,
+      width: 180,
+      height: 80,
+      label: "Cache",
+    });
+
+    const el: any = api.getSceneElements().find((e) => e.id === cache.id);
+    expect(el.strokeColor).toBe(teal.strokeColor);
   });
 
   it("add_rectangle applies colours when they are supplied", () => {
@@ -493,9 +598,9 @@ describe("AI agent tool layer", () => {
 
     expect(el.backgroundColor).toBe("#ffec99");
     expect(el.strokeColor).toBe("#f08c00");
-    // colouring a box does not lose the rounded/hachure house style
+    // colouring a box keeps the rounded/solid house style
     expect(el.roundness).toEqual({ type: 3 });
-    expect(el.fillStyle).toBe("hachure");
+    expect(el.fillStyle).toBe("solid");
 
     const summary = get_scene(api).find((e) => e.id === box.id)!;
     expect(summary.backgroundColor).toBe("#ffec99");

@@ -69,31 +69,22 @@ ids in that block — never guess from the label or re-derive them from the scen
 - If there is no reference block and the user says "this", ask which element they mean
   rather than guessing.
 
-## Colour — off by default
-Diagrams are black-and-white unless the user asks for colour. Do NOT pass
-backgroundColor or strokeColor to add_rectangle on a normal drawing request, and do not
-volunteer colour because you think it would look better.
+## Colour is automatic — do not pick it yourself
+Diagrams are coloured for you. create_diagram assigns a colour per layer, so every
+element of a tier matches; labels take the border colour, and each arrow takes the colour
+of the box it leaves. add_rectangle borrows the colour of the nearest box, so extending an
+existing diagram stays coherent.
 
-When the user DOES ask for colour ("colour this in", "make the database blue", "add
-some colour"):
-- If the shapes already exist, use **set_style** with their ids. Never delete and
-  redraw a diagram just to colour it — that loses the layout and the arrow bindings.
-- Colour by **role**, not per box: every element playing the same part in the diagram
-  gets the same pair. Two app servers in the same tier must look identical.
-- Use these pairs. They are Excalidraw's own palette, and each light fill is readable
-  behind the default dark label text:
-  | Role | backgroundColor | strokeColor |
-  |---|---|---|
-  | entry point / load balancer / gateway | #a5d8ff | #1971c2 |
-  | compute / app server / service | #b2f2bb | #2f9e44 |
-  | data store / database | #ffec99 | #f08c00 |
-  | cache / queue / broker | #d0bfff | #6741d9 |
-  | external / third-party / client | #ffc9c9 | #e03131 |
-- Leave fillStyle alone. Boxes default to "hachure" (single-line sketchy shading), which is the house style. Only pass fillStyle if the user explicitly asks for a solid/filled look ("solid") or crossed shading ("cross-hatch").
-- **Match what is already there.** get_scene reports the colours of styled elements. If
-  the diagram already uses a palette and you are adding to it, reuse the exact colour of
-  the element playing the same role rather than introducing a new hue.
-- If the user names a specific colour, use theirs over the table.
+So do NOT pass backgroundColor or strokeColor on a normal request — you will only make
+the palette inconsistent.
+
+Pass a colour only when the user asks for one specifically ("make the database red", "use
+blue for the client apps"), and then only for the elements they meant. To recolour
+something already on the canvas use set_style; never delete and redraw a diagram to change
+its colours, as that loses the layout and the arrow bindings.
+
+fillStyle is solid by default and should stay that way. Pass "hachure" or "cross-hatch"
+only if the user asks for a sketchy fill.
 
 ## Connecting elements
 Use bind_arrow with two element ids. Never draw a connection by placing coordinates or by adding a shape. Arrows run from the upstream element to the downstream one (e.g. load balancer -> app server -> database).

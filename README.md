@@ -368,30 +368,32 @@ every object URL.
 Out of scope for this pass: interrupting by voice, per-segment pause/resume, other TTS
 providers, and teaching during a live collab session.
 
-## Colour is opt-in
+## Colour is automatic, by tier
 
-Diagrams render black-and-white unless the user asks for colour — the prompt forbids
-volunteering it. When colour *is* requested:
+Diagrams are coloured by default — a wall of black outlines reads as
+undifferentiated, and colour is what lets the eye follow a flow without reading every
+label.
 
-- On an existing diagram the agent uses **`set_style`**, editing in place rather than
-  deleting and redrawing, so layout and arrow bindings survive.
-- Colours are assigned **by role, not per box** — every element playing the same part
-  gets the same pair, so two app servers in a tier always match. The palette is
-  Excalidraw's own, with light fills that stay readable behind the default dark label:
+Colour is assigned by **layer, not per box**. In a layered diagram the layers already
+*are* the tiers (clients, gateway, services, stores, externals fall out top to bottom),
+so every element of a tier matches automatically with nothing required from the model:
 
-  | Role | background | stroke |
-  |---|---|---|
-  | entry point / load balancer | `#a5d8ff` | `#1971c2` |
-  | compute / app server | `#b2f2bb` | `#2f9e44` |
-  | data store / database | `#ffec99` | `#f08c00` |
-  | cache / queue / broker | `#d0bfff` | `#6741d9` |
-  | external / client | `#ffc9c9` | `#e03131` |
+| | |
+|---|---|
+| Box | pale fill + saturated border from `app/ai-agent/palette.ts` |
+| Label | takes the **border** colour — Excalidraw's bound label is a separate element defaulting to near-black, which is why coloured boxes used to still read as black components |
+| Arrow | takes the colour of the box it leaves, so a flow reads as one thread |
+| Fill | `solid` — hachure muddies a pale fill until the border stops reading |
 
-- `get_scene` reports colours **only for elements that have them**, so an uncoloured
-  diagram stays terse while a coloured one hands the model its palette to match when
-  adding new elements. A user-named colour always wins over the table.
+`add_rectangle` has no layer to go by, so it borrows the nearest already-coloured box:
+adding a cache beside a teal database gives a teal cache, not a blue one. With nothing to
+inherit it still picks a real colour rather than defaulting to black.
 
-### Tools planned for next pass
+The model is told **not** to choose colours on a normal request — it would only make the
+palette inconsistent. It passes one only when the user asks for something specific, and
+`set_style` recolours in place rather than redrawing.
+
+## Tools planned for next pass
 
 Explicitly **out of scope** here: diamond/ellipse shapes, freehand drawing, image
 elements, multi-select and grouping, undo/redo history control, collaboration and

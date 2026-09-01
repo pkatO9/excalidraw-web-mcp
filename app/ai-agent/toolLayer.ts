@@ -11,6 +11,7 @@ import type { ExcalidrawElement } from "@excalidraw/element/types";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 
 import { layoutGraph } from "./layout";
+import { inheritTier, tierFor } from "./palette";
 
 import { startLesson } from "./tutorSession";
 
@@ -370,6 +371,26 @@ export const add_rectangle = (
     height,
   });
 
+  // A lone box has no layer to take a tier from, so it borrows the nearest
+  // already-coloured box — adding a cache beside a teal database should not
+  // produce a blue one. With nothing to inherit it still gets a real colour
+  // rather than defaulting to black.
+  const tier = inheritTier(
+    api.getSceneElements().map((el) => ({
+      x: el.x,
+      y: el.y,
+      strokeColor: el.strokeColor,
+      backgroundColor: el.backgroundColor,
+    })),
+    { x, y },
+  );
+
+  const resolved = {
+    backgroundColor: tier.backgroundColor,
+    strokeColor: tier.strokeColor,
+    ...pickStyle(style),
+  };
+
   const created = convertToExcalidrawElements([
     {
       type: "rectangle",
@@ -377,14 +398,17 @@ export const add_rectangle = (
       y,
       width,
       height,
-      // House style for this agent, applied here rather than left to the model
-      // so it holds on every box: rounded corners, and a hachure (single-line
-      // diagonal) fill that keeps the hand-drawn look once a colour is set.
-      // `pickStyle` is spread after, so an explicit fillStyle still wins.
+      // House style, applied here rather than left to the model so it holds on
+      // every box: rounded corners and a solid fill. An explicit style still
+      // wins, since `resolved` already folded the caller's values in.
       roundness: { type: ROUNDNESS.ADAPTIVE_RADIUS },
-      fillStyle: "hachure",
-      ...pickStyle(style),
-      ...(label ? { label: { text: label } } : {}),
+      fillStyle: "solid",
+      ...resolved,
+      // The bound label is a separate element defaulting to near-black, so it
+      // has to be told to match the border.
+      ...(label
+        ? { label: { text: label, strokeColor: resolved.strokeColor } }
+        : {}),
     } as ExcalidrawElementSkeleton,
   ]);
 
@@ -486,9 +510,11 @@ export const bind_arrow = (
     axis?: AnchorAxis;
     /** Absolute bend points, from the layout engine's reserved corridors. */
     waypoints?: { x: number; y: number }[];
+    /** Usually the source box's colour, so a flow reads as one thread. */
+    strokeColor?: string;
   },
 ) => {
-  const { source_id, target_id, axis, waypoints } = args;
+  const { source_id, target_id, axis, waypoints, strokeColor } = args;
 
   if (source_id === target_id) {
     throw new Error("source_id and target_id must be different elements.");
@@ -527,6 +553,7 @@ export const bind_arrow = (
           ...route.map((point) => [point.x - from.x, point.y - from.y]),
           [to.x - from.x, to.y - from.y],
         ],
+        ...(strokeColor ? { strokeColor } : {}),
         start: { id: source_id },
         end: { id: target_id },
       },
@@ -665,7 +692,11 @@ const heightForShape = (shape: DiagramShape) =>
 export const create_diagram = (
   api: ExcalidrawImperativeAPI,
   args: {
-    nodes: { key: string; label: string; shape?: DiagramShape }[];
+    nodes: ({
+      key: string;
+      label: string;
+      shape?: DiagramShape;
+    } & ElementStyle)[];
     edges: { from: string; to: string }[];
     direction?: "TB" | "LR";
     replace?: boolean;
@@ -714,14 +745,21 @@ export const create_diagram = (
     ? Math.max(...existing.map((el) => el.y + el.height)) + 120
     : 120;
 
-  const { placements, routes } = layoutGraph(
+  const { placements, routes, layers } = layoutGraph(
     sized.map(({ key, width, height }) => ({ key, width, height })),
     edges,
     { direction, originY: lowestFree },
   );
 
+  // Colour follows the tier a box landed in, so every element of a layer
+  // matches without the model having to say anything. An explicit colour on a
+  // node still wins.
+  const tierOf = (key: string) => tierFor(layers.get(key) ?? 0);
+
   const skeletons = sized.map((node) => {
     const at = placements.get(node.key)!;
+    const tier = tierOf(node.key);
+    const strokeColor = node.strokeColor ?? tier.strokeColor;
     return {
       type: node.shape,
       x: at.x,
@@ -729,8 +767,14 @@ export const create_diagram = (
       width: node.width,
       height: node.height,
       roundness: { type: ROUNDNESS.ADAPTIVE_RADIUS },
-      fillStyle: "hachure",
-      label: { text: node.label },
+      // Solid, not hachure: sketchy shading muddies a pale fill until the
+      // border stops reading as a border.
+      fillStyle: node.fillStyle ?? "solid",
+      backgroundColor: node.backgroundColor ?? tier.backgroundColor,
+      strokeColor,
+      // The bound label is its own element and defaults to near-black, so
+      // without this a coloured box still reads as a black component.
+      label: { text: node.label, strokeColor },
     };
   });
 
@@ -770,6 +814,9 @@ export const create_diagram = (
         target_id: idOf.get(edge.to)!,
         axis,
         waypoints: routes[index],
+        // An arrow takes the colour of the box it leaves, so a flow can be
+        // followed by eye without reading every label.
+        strokeColor: tierOf(edge.from).strokeColor,
       });
       bound++;
     } catch (error) {
