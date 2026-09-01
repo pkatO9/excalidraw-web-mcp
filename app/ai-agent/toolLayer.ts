@@ -512,9 +512,12 @@ export const bind_arrow = (
     waypoints?: { x: number; y: number }[];
     /** Usually the source box's colour, so a flow reads as one thread. */
     strokeColor?: string;
+    /** Pass null for a hard polyline; omitted means curved. */
+    roundness?: { type: number } | null;
   },
 ) => {
-  const { source_id, target_id, axis, waypoints, strokeColor } = args;
+  const { source_id, target_id, axis, waypoints, strokeColor, roundness } =
+    args;
 
   if (source_id === target_id) {
     throw new Error("source_id and target_id must be different elements.");
@@ -554,6 +557,14 @@ export const bind_arrow = (
           [to.x - from.x, to.y - from.y],
         ],
         ...(strokeColor ? { strokeColor } : {}),
+        // Curved by default. A routed arrow bends through its corridors, and
+        // sharp kinks at those bends look mechanical next to Excalidraw's
+        // hand-drawn shapes; PROPORTIONAL_RADIUS smooths them into an arc.
+        // `roundness` may be passed as null to force a straight polyline.
+        roundness:
+          roundness === undefined
+            ? { type: ROUNDNESS.PROPORTIONAL_RADIUS }
+            : roundness,
         start: { id: source_id },
         end: { id: target_id },
       },

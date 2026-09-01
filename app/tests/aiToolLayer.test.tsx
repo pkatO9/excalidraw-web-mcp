@@ -519,6 +519,56 @@ describe("AI agent tool layer", () => {
     expect(get_scene(api).some((el) => el.id === existing.id)).toBe(true);
   });
 
+  it("draws curved arrows, not sharp or elbowed ones", () => {
+    // Excalidraw's arrow-type picker: sharp is roundness null, curved is
+    // PROPORTIONAL_RADIUS, elbowed sets `elbowed`. We want the middle one.
+    const result = create_diagram(api, {
+      nodes: [
+        { key: "a", label: "A" },
+        { key: "b", label: "B" },
+        { key: "c", label: "C" },
+      ],
+      edges: [
+        { from: "a", to: "b" },
+        { from: "b", to: "c" },
+        { from: "a", to: "c" }, // spans a layer, so it is routed and bends
+      ],
+    });
+    expect(result.arrows_bound).toBe(3);
+
+    const arrows = api.getSceneElements().filter((e) => e.type === "arrow");
+    expect(arrows).toHaveLength(3);
+    for (const arrow of arrows as any[]) {
+      expect(arrow.roundness).toEqual({ type: 2 });
+      expect(arrow.elbowed).toBeFalsy();
+    }
+  });
+
+  it("a caller can still force a sharp arrow", () => {
+    const a = add_rectangle(api, {
+      x: 0,
+      y: 0,
+      width: 180,
+      height: 80,
+      label: "A",
+    });
+    const b = add_rectangle(api, {
+      x: 0,
+      y: 400,
+      width: 180,
+      height: 80,
+      label: "B",
+    });
+    const arrow = bind_arrow(api, {
+      source_id: a.id,
+      target_id: b.id,
+      roundness: null,
+    });
+
+    const el: any = api.getSceneElements().find((e) => e.id === arrow.id);
+    expect(el.roundness).toBeNull();
+  });
+
   it("bind_arrow reports a usable error for an unknown id", () => {
     const a = add_rectangle(api, {
       x: 0,

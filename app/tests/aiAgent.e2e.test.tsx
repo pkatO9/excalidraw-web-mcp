@@ -105,14 +105,24 @@ describeE2E("AI agent end-to-end", () => {
       expect(ids.has(arrow.endBinding!)).toBe(true);
     }
 
-    // house style survives a real agent run: rounded corners, hachure fill,
-    // and nothing coloured because colour was never asked for
+    // house style survives a real agent run: rounded corners, solid fill, and
+    // a real colour — colour is the default now, not opt-in, so nothing should
+    // come back black or transparent
     for (const raw of api
       .getSceneElements()
       .filter((el) => el.type === "rectangle") as any[]) {
       expect(raw.roundness).toEqual({ type: 3 });
-      expect(raw.fillStyle).toBe("hachure");
-      expect(raw.backgroundColor).toBe("transparent");
+      expect(raw.fillStyle).toBe("solid");
+      expect(raw.backgroundColor).not.toBe("transparent");
+      expect(raw.strokeColor).not.toBe("#1e1e1e");
+    }
+
+    // and arrows are curved, not sharp or elbowed
+    for (const raw of api
+      .getSceneElements()
+      .filter((el) => el.type === "arrow") as any[]) {
+      expect(raw.roundness).toEqual({ type: 2 });
+      expect(raw.elbowed).toBeFalsy();
     }
 
     // arrows must terminate ON the shape outlines, never inside a box
