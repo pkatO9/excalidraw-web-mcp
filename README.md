@@ -120,41 +120,61 @@ with `LLM_PROVIDER` in `server/.env`; a request may also override it per call wi
 
 ## Deployment
 
-The two halves deploy separately, because they have different requirements: the
-editor is a static bundle, and the backend has to hold a WebSocket open for the length
-of a voice session. That rules out putting the backend on serverless functions.
+Live: **https://nice-field-0f080db0f.7.azurestaticapps.net**
 
-| Half | Where | Config |
+The two halves deploy separately, because they have different requirements: the editor
+is a static bundle, and the backend has to hold a WebSocket open for the length of a
+voice session — which rules out serverless functions. Both sit in Azure, alongside the
+Azure OpenAI resource they call.
+
+| Half | Where | Host |
 |---|---|---|
-| Editor (static) | Vercel | `vercel.json` |
-| Backend (Node + `ws`) | Render | `render.yaml` |
+| Editor (static) | Azure Static Web Apps | `nice-field-0f080db0f.7.azurestaticapps.net` |
+| Backend (Node + `ws`) | Azure App Service | `excalidraw-web-mcp-api.azurewebsites.net` |
 
-**Backend first**, because the frontend needs its URL at build time. In the Render
-dashboard: **New → Blueprint**, point it at this repo, and fill in the values marked
-`sync: false` — the Azure endpoint and key. `render.yaml` defaults to the free plan,
-which spins the service down after about 15 minutes idle and makes the next request
-wait through a cold start; move it to `starter` if that matters. Check
-`https://<service>.onrender.com/api/health` before going further.
+**Backend first**, because the frontend needs its URL at build time.
 
-**Then the editor.** Import the repo on Vercel and set one environment variable:
-
-```
-VITE_AGENT_API=https://<your-service>.onrender.com
+```bash
+cd server
+zip -r /tmp/server.zip . -x "node_modules/*" -x ".env"
+az webapp deploy -g excalidraw-web-mcp-rg -n excalidraw-web-mcp-api \
+  --src-path /tmp/server.zip --type zip
 ```
 
-It is read at build time (`app/ai-agent/config.ts`), not at runtime, so changing it
-means redeploying. The realtime socket URL is derived from it by swapping the scheme,
-so `https://` becomes `wss://` with nothing further to configure.
+Credentials live in App Service application settings, not in the zip — `.env` is
+excluded deliberately. `SCM_DO_BUILD_DURING_DEPLOYMENT=true` makes Azure run the
+install. Check `https://excalidraw-web-mcp-api.azurewebsites.net/api/health` before
+going further; it reports which providers are actually configured.
 
-Finally set `FRONTEND_ORIGIN` on the Render service to the Vercel URL, which closes
-CORS to just that origin, and redeploy the backend.
+WebSockets must be **on** for the voice agent (`az webapp config set --web-sockets-enabled true`).
+They are.
 
-Two things worth knowing about the build. `installCommand` is a no-op because
-`excalidraw/` does not exist until `setup.sh` has run, so all the real work happens in
-`buildCommand`. And upstream Excalidraw is **pinned** to a commit in `setup.sh`: step 3
-patches `App.tsx` by matching exact source text, so tracking `master` would eventually
-turn a working deployment into a failing build with no warning. Override it
-deliberately with `EXCALIDRAW_REF` — a branch name or a SHA — when you want to move up.
+**Then the editor.** `VITE_AGENT_API` is read at build time (`app/ai-agent/config.ts`),
+not at runtime, so it is baked into the bundle and changing it means rebuilding. The
+realtime socket URL is derived from it by swapping the scheme, so `https://` becomes
+`wss://` with nothing further to configure.
+
+```bash
+./setup.sh
+cd excalidraw
+VITE_AGENT_API=https://excalidraw-web-mcp-api.azurewebsites.net yarn build
+npx @azure/static-web-apps-cli deploy ./excalidraw-app/build \
+  --deployment-token "$(az staticwebapp secrets list -n excalidraw-web-mcp \
+     -g excalidraw-web-mcp-rg --query properties.apiKey -o tsv)" \
+  --env production
+```
+
+Set `FRONTEND_ORIGIN` on the App Service to the editor's origin, which closes CORS to
+just that one.
+
+**The App Service plan is F1 (Free).** That means no `alwaysOn`, so the first request
+after an idle period pays a cold start of around 13 seconds, and there is a daily CPU
+quota that a busy day could exhaust. Moving the plan to B1 removes both.
+
+One thing worth knowing about the build: upstream Excalidraw is **pinned** to a commit
+in `setup.sh`, because step 3 patches `App.tsx` by matching exact source text — tracking
+`master` would eventually turn a working deployment into a failing build with no
+warning. `EXCALIDRAW_REF` overrides it deliberately.
 
 ## Tools
 
@@ -586,34 +606,6 @@ from older versions.
   Excalidraw itself handles it for history and collaboration.
 - Styling is left at Excalidraw's defaults, per scope. Default box is 180×80.
 - The dev server binds **port 3001** here because 3000 was occupied.
-
-## Deploying the backend to Azure
-
-Not deployed as part of this MVP — the frontend runs locally, so the backend does too.
-When it is deployed it goes to Azure, per project constraint. The backend is a
-stateless Express app with no session state, so App Service is enough:
-
-```bash
-cd server
-az webapp up \
-  --name excalidraw-web-mcp-api \
-  --resource-group <your-resource-group> \
-  --runtime "NODE:20-lts" \
-  --sku B1
-
-az webapp config appsettings set \
-  --name excalidraw-web-mcp-api \
-  --resource-group <your-resource-group> \
-  --settings \
-    LLM_PROVIDER=azure \
-    AZURE_OPENAI_ENDPOINT="https://<your-resource>.openai.azure.com/" \
-    AZURE_OPENAI_DEPLOYMENT=gpt-4.1 \
-    AZURE_OPENAI_API_KEY="<key>"
-```
-
-Then run the frontend with `VITE_AGENT_API=https://excalidraw-web-mcp-api.azurewebsites.net`.
-For production, prefer a managed identity or Key Vault reference over a literal key,
-and restrict CORS to the frontend's origin (it is currently open).
 
 ## Security notes
 
