@@ -118,6 +118,44 @@ with `LLM_PROVIDER` in `server/.env`; a request may also override it per call wi
 
 `GET /api/health` reports which providers are actually configured.
 
+## Deployment
+
+The two halves deploy separately, because they have different requirements: the
+editor is a static bundle, and the backend has to hold a WebSocket open for the length
+of a voice session. That rules out putting the backend on serverless functions.
+
+| Half | Where | Config |
+|---|---|---|
+| Editor (static) | Vercel | `vercel.json` |
+| Backend (Node + `ws`) | Render | `render.yaml` |
+
+**Backend first**, because the frontend needs its URL at build time. In the Render
+dashboard: **New → Blueprint**, point it at this repo, and fill in the values marked
+`sync: false` — the Azure endpoint and key. `render.yaml` defaults to the free plan,
+which spins the service down after about 15 minutes idle and makes the next request
+wait through a cold start; move it to `starter` if that matters. Check
+`https://<service>.onrender.com/api/health` before going further.
+
+**Then the editor.** Import the repo on Vercel and set one environment variable:
+
+```
+VITE_AGENT_API=https://<your-service>.onrender.com
+```
+
+It is read at build time (`app/ai-agent/config.ts`), not at runtime, so changing it
+means redeploying. The realtime socket URL is derived from it by swapping the scheme,
+so `https://` becomes `wss://` with nothing further to configure.
+
+Finally set `FRONTEND_ORIGIN` on the Render service to the Vercel URL, which closes
+CORS to just that origin, and redeploy the backend.
+
+Two things worth knowing about the build. `installCommand` is a no-op because
+`excalidraw/` does not exist until `setup.sh` has run, so all the real work happens in
+`buildCommand`. And upstream Excalidraw is **pinned** to a commit in `setup.sh`: step 3
+patches `App.tsx` by matching exact source text, so tracking `master` would eventually
+turn a working deployment into a failing build with no warning. Override it
+deliberately with `EXCALIDRAW_REF` — a branch name or a SHA — when you want to move up.
+
 ## Tools
 
 All of them run in the browser, in `excalidraw/excalidraw-app/ai-agent/toolLayer.ts`.
@@ -604,4 +642,5 @@ Built on [Excalidraw](https://github.com/excalidraw/excalidraw) (MIT, © 2020 Ex
 This repo contains only the agent additions; `setup.sh` clones upstream Excalidraw at
 build time rather than vendoring it.
 
-No `LICENSE` file is included yet — add one before treating this as reusable by others.
+This project is released under the [MIT License](LICENSE), the same licence as upstream
+Excalidraw.

@@ -11,11 +11,23 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FORK_DIR="$REPO_ROOT/excalidraw"
 APP_DIR="$FORK_DIR/excalidraw-app"
 
+# Upstream is pinned rather than tracked. Step 3 patches App.tsx by matching
+# exact source text, so a change upstream turns a working build into a failed
+# one with no warning — and a deployed site has to keep building long after the
+# commit that last worked here. Set EXCALIDRAW_REF to a branch or SHA to move
+# it deliberately; `master` still works if you want the latest.
+EXCALIDRAW_REF="${EXCALIDRAW_REF:-e1bb9ff8f8931e783c11d104abb8967ac6605c9a}"
+
 echo "==> 1/3  Excalidraw checkout"
 if [ -d "$FORK_DIR/.git" ]; then
   echo "    already cloned at $FORK_DIR — leaving it alone"
 else
-  git clone --depth 1 https://github.com/excalidraw/excalidraw.git "$FORK_DIR"
+  # A shallow clone cannot check out an arbitrary SHA, so fetch that one commit.
+  git init -q "$FORK_DIR"
+  git -C "$FORK_DIR" remote add origin https://github.com/excalidraw/excalidraw.git
+  git -C "$FORK_DIR" fetch -q --depth 1 origin "$EXCALIDRAW_REF"
+  git -C "$FORK_DIR" checkout -q FETCH_HEAD
+  echo "    cloned upstream at $EXCALIDRAW_REF"
 fi
 
 echo "==> 2/3  Copying the agent code in"
