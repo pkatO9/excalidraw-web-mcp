@@ -288,13 +288,15 @@ export const AIChatSidebar = () => {
   return (
     <Sidebar name={AI_SIDEBAR_NAME} docked>
       <Sidebar.Header>
-        <div className="ai-chat__brand">
-          <span className="ai-chat__wordmark">Draftsmith</span>
-          <span className="ai-chat__tagline">powered by WebMCP</span>
+        <div className="ai-chat__header">
+          <div className="ai-chat__brand">
+            <span className="ai-chat__wordmark">Draftsmith</span>
+            <span className="ai-chat__tagline">powered by WebMCP</span>
+          </div>
+          {provider && (
+            <ProviderBadge mode={provider.mode} count={provider.count} />
+          )}
         </div>
-        {provider && (
-          <ProviderBadge mode={provider.mode} count={provider.count} />
-        )}
       </Sidebar.Header>
 
       <div className="ai-chat">

@@ -1,7 +1,20 @@
 import { useCallback, useEffect, useState } from "react";
 
-const DEFAULT_SIDEBAR_WIDTH = 302; // matches RIGHT_SIDEBAR_WIDTH upstream
-const MIN_SIDEBAR_WIDTH = 280;
+/**
+ * Upstream's RIGHT_SIDEBAR_WIDTH is 302, which was the default here until the
+ * header had a name, a tagline and a badge in it. Below about 340px the badge
+ * cannot sit beside the wordmark, and while the header now wraps rather than
+ * breaking, the one-line arrangement is the better one — so the default is a
+ * width that fits it. Narrower is still allowed, it just wraps.
+ */
+const DEFAULT_SIDEBAR_WIDTH = 360;
+
+/**
+ * The floor is what the composer needs: send, mic, Talk and Teach in one row
+ * without the labels colliding. Below this the panel stops being usable rather
+ * than merely tight.
+ */
+const MIN_SIDEBAR_WIDTH = 300;
 const MAX_SIDEBAR_WIDTH = 900;
 const WIDTH_STORAGE_KEY = "ai-agent:sidebar-width";
 const WIDTH_STYLE_ID = "ai-agent-sidebar-width";

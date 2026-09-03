@@ -51,8 +51,24 @@
     }
   }
 
-  // Name over tagline, so the panel introduces itself in one glance and the
-  // header still fits the badge and the close button on a narrow sidebar.
+  // Everything in the sidebar header except the close button, so the header's
+  // responsive behaviour lives here rather than in an upstream stylesheet we do
+  // not own. Deliberately not positioned: the tool popover anchors to
+  // .sidebar__header, which is the full width of the panel.
+  //
+  // It wraps. The brand and the badge fit on one line from about 340px up; drag
+  // narrower and the badge drops to its own row instead of squeezing the
+  // tagline out of its box, which is what it used to do.
+  &__header {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.5rem;
+  }
+
+  // Name over tagline, so the panel introduces itself in one glance.
   &__brand {
     display: flex;
     flex-direction: column;
@@ -65,14 +81,21 @@
     font-weight: 700;
     letter-spacing: -0.01em;
     line-height: 1.1;
+    white-space: nowrap;
   }
 
+  // Never wrap and never overflow: at the old min width this broke into three
+  // lines and then ran underneath the badge, because nothing here could shrink
+  // and nothing clipped.
   &__tagline {
     font-size: 0.65rem;
     font-weight: 600;
     letter-spacing: 0.01em;
     line-height: 1.1;
     color: var(--color-gray-60);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   // Says plainly whether the browser implements WebMCP or we are on the shim,
@@ -80,6 +103,7 @@
   // a button because the next question is always "which tools?".
   &__webmcp {
     margin-left: auto;
+    flex: 0 0 auto;
     display: inline-flex;
     align-items: center;
     gap: 0.25rem;
@@ -437,6 +461,7 @@
   &__actions {
     display: flex;
     align-items: stretch;
+    flex-wrap: wrap;
     gap: 0.5rem;
   }
 
@@ -499,7 +524,9 @@
   }
 
   &__send {
-    flex: 1;
+    // Basis rather than 0, so a narrow panel wraps the row instead of grinding
+    // Send down to a stub that says "Se…".
+    flex: 1 1 5rem;
     font: inherit;
     cursor: pointer;
     padding: 0.5rem;

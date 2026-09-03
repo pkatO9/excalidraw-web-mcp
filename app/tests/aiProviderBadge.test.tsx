@@ -1,5 +1,11 @@
+import { resolvablePromise } from "@excalidraw/common";
+import { Excalidraw } from "@excalidraw/excalidraw";
+import { render as renderEditor } from "@excalidraw/excalidraw/tests/test-utils";
 import { fireEvent, render, screen } from "@testing-library/react";
 
+import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
+
+import { AIChatSidebar, AI_SIDEBAR_NAME } from "../ai-agent/ChatSidebar";
 import { ProviderBadge } from "../ai-agent/ProviderBadge";
 import { TOOL_DECLARATIONS } from "../ai-agent/webmcp/descriptors";
 
@@ -76,5 +82,49 @@ describe("the WebMCP badge", () => {
     fireEvent.mouseDown(document.body);
 
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+/**
+ * The header's layout is CSS, which these cannot see. What they can hold is the
+ * structure that CSS depends on: brand and badge inside one wrapper that owns
+ * the wrapping, and the popover anchored to the sidebar header rather than to
+ * that wrapper — .sidebar__header is the full width of the panel and is the
+ * only positioned ancestor, so a popover parented anywhere else would be laid
+ * out against a box that is only as wide as the badge.
+ */
+describe("the header at a narrow sidebar", () => {
+  let container: HTMLElement;
+
+  beforeEach(async () => {
+    const apiPromise = resolvablePromise<ExcalidrawImperativeAPI>();
+    const rendered = await renderEditor(
+      <Excalidraw
+        onExcalidrawAPI={(a) => apiPromise.resolve(a as any)}
+        initialData={{ appState: { openSidebar: { name: AI_SIDEBAR_NAME } } }}
+      >
+        <AIChatSidebar />
+      </Excalidraw>,
+    );
+    container = rendered.container;
+    await apiPromise;
+  });
+
+  it("keeps the brand and the badge in one wrapper that can wrap", () => {
+    const header = container.querySelector(".ai-chat__header")!;
+
+    expect(header).not.toBeNull();
+    expect(header.querySelector(".ai-chat__brand")).not.toBeNull();
+    expect(header.querySelector(".ai-chat__webmcp")).not.toBeNull();
+  });
+
+  it("hangs the tool popover off the sidebar header, not the wrapper", () => {
+    fireEvent.click(container.querySelector("button.ai-chat__webmcp")!);
+
+    const popover = container.querySelector(".ai-chat__tools")!;
+    expect(popover).not.toBeNull();
+    // Its offset parent at runtime is .sidebar__header; in the DOM that means
+    // no positioned element may sit between them.
+    expect(popover.closest(".sidebar__header")).not.toBeNull();
   });
 });
