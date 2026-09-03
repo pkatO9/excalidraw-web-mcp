@@ -85,7 +85,7 @@ describe("WebMCP provider", () => {
   it("runs a tool through the WebMCP surface and changes the canvas", async () => {
     registerCanvasTools(api);
 
-    const outcome = await callTool("add_rectangle", {
+    const outcome = await callTool("add_shape", {
       x: 200,
       y: 120,
       width: 180,
@@ -97,6 +97,45 @@ describe("WebMCP provider", () => {
     const scene = get_scene(api);
     expect(scene).toHaveLength(1);
     expect(scene[0]).toMatchObject({ label: "Database", x: 200, y: 120 });
+  });
+
+  it("still runs a tool after a hot reload empties the module's cache", async () => {
+    // Register through the module instance the app is using.
+    registerCanvasTools(api);
+
+    // A dev hot reload re-evaluates the module: its cache of registered tools
+    // starts empty again, while the provider object on `navigator` — and so
+    // the real registry — survives untouched. Before this was handled, every
+    // call in the session failed with "declared but not registered yet" until
+    // the page was reloaded by hand.
+    vi.resetModules();
+    const reloaded = await import("../ai-agent/webmcp/provider");
+
+    expect(reloaded.getRegisteredTools()).toHaveLength(0);
+
+    const outcome = await reloaded.callTool("add_shape", {
+      x: 40,
+      y: 40,
+      width: 180,
+      height: 80,
+      label: "Survived",
+    });
+
+    expect(outcome).toMatchObject({ ok: true });
+    expect(get_scene(api)).toHaveLength(1);
+    expect(get_scene(api)[0]).toMatchObject({ label: "Survived" });
+  });
+
+  it("reports an unregistered tool honestly once the provider is really gone", async () => {
+    registerCanvasTools(api);
+    unregisterCanvasTools();
+
+    const outcome = await callTool("remove_element", { id: "anything" });
+
+    expect(outcome).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("not registered"),
+    });
   });
 
   it("returns content blocks, not raw values", async () => {

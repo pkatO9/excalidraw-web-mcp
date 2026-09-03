@@ -188,14 +188,14 @@ describeTutorE2E("AI tutor end-to-end", () => {
     api = await apiPromise;
 
     // A small but real diagram to teach.
-    const lb = executeTool(api, "add_rectangle", {
+    const lb = executeTool(api, "add_shape", {
       x: 200,
       y: 120,
       width: 180,
       height: 80,
       label: "Load Balancer",
     }) as any;
-    const db = executeTool(api, "add_rectangle", {
+    const db = executeTool(api, "add_shape", {
       x: 200,
       y: 320,
       width: 180,

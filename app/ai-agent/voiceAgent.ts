@@ -109,7 +109,7 @@ export class VoiceAgent {
 
   /**
    * A single realtime response can contain several tool calls — the model
-   * called add_rectangle three times and bind_arrow four times within one
+   * called add_shape three times and bind_arrow four times within one
    * response while building a diagram, confirmed by instrumenting the live
    * socket. `response.create` must fire once per RESPONSE, not once per tool
    * call: sending it immediately after every result races against the still-
@@ -492,6 +492,7 @@ const describeVoiceCall = (name: string, input: any) => {
   switch (name) {
     case "get_scene":
       return "read the canvas";
+    case "add_shape":
     case "add_rectangle":
       return `added “${input.label}”`;
     case "add_text":

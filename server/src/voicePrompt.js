@@ -64,7 +64,33 @@ When you do call it:
 
 ## Reviewing
 When asked to review or critique, call get_scene first, then give at most three specific
-observations about what is actually on the canvas. Name real elements. No generic advice.`;
+observations about what is actually on the canvas. Name real elements. No generic advice.
+
+## Explaining the diagram — you do this yourself here
+You do NOT have the \`teach_diagram\` tool in this conversation. Ignore what the rules
+above say about it: the tutor narrates through a separate pipeline, and two voices
+talking over each other is never what anyone wants.
+
+So when the user asks you to explain the diagram, teach them, or walk them through it,
+just do it — out loud, in this turn. Call get_scene first so you are describing what is
+actually on the canvas, then follow the flow: where data enters, where it goes, why the
+pieces are arranged that way. Keep it to short spoken turns like everything else, and
+let them interrupt with questions.
+
+Never announce a walkthrough you then do not give. "Sure, let me walk you through it"
+followed by silence is the one failure mode here — the explanation IS the reply, so
+start explaining in the same breath.`;
+
+/**
+ * Tools withheld from the voice session.
+ *
+ * `teach_diagram` starts the tutor, which speaks through its own pipeline; a live
+ * agent that can already talk should explain the diagram itself instead, which the
+ * prompt section above tells it to do. Exported so the prompt and the session config
+ * cannot drift apart — a tool removed here but still described as available is
+ * exactly what makes an agent promise something it cannot do.
+ */
+export const VOICE_EXCLUDED_TOOLS = ["teach_diagram"];
 
 /** The realtime API takes tools flat, not nested under a `function` key. */
 export const toRealtimeTools = (schemas) =>

@@ -520,6 +520,34 @@ describe("AI agent tool layer", () => {
     expect(get_scene(api).some((el) => el.id === existing.id)).toBe(true);
   });
 
+  it("add_shape widens a diamond so its label does not wrap to pieces", () => {
+    // A diamond's label sits in the rectangle inscribed in it, so the 180px the
+    // model is told to use for a box leaves a decision label like "Payment OK?"
+    // broken across lines. create_diagram accounts for this; so must this path.
+    const diamond = add_shape(api, {
+      x: 0,
+      y: 0,
+      width: 180,
+      height: 80,
+      label: "Payment OK?",
+      shape: "diamond",
+    });
+
+    expect(diamond.width).toBeGreaterThan(180);
+    expect(diamond.height).toBeGreaterThan(80);
+
+    // A rectangle with the same label is left exactly as asked for.
+    const box = add_shape(api, {
+      x: 600,
+      y: 0,
+      width: 180,
+      height: 80,
+      label: "Payment OK?",
+    });
+    expect(box.width).toBe(180);
+    expect(box.height).toBe(80);
+  });
+
   it("add_shape can add a single diamond or ellipse, not just a rectangle", () => {
     // The gap this closes: the agent could only make diamonds through
     // create_diagram, so "add a decision diamond next to the API server" was

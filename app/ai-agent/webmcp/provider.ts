@@ -49,6 +49,12 @@ const SHIM_FLAG = "__excalidrawWebMcpShim";
 let mode: ProviderMode = "shim";
 let registered: WebMcpTool[] = [];
 
+/**
+ * The canvas the tools are bound to, kept so `callTool` can re-register if it
+ * ever finds the local cache empty. See `findTool`.
+ */
+let providerApi: ExcalidrawImperativeAPI | null = null;
+
 const asText = (value: unknown) =>
   typeof value === "string" ? value : JSON.stringify(value ?? null);
 
@@ -143,6 +149,7 @@ const getModelContext = (): ModelContextLike => {
  */
 export const registerCanvasTools = (api: ExcalidrawImperativeAPI) => {
   const context = getModelContext();
+  providerApi = api;
   registered = TOOL_DECLARATIONS.map((declaration) =>
     toWebMcpTool(declaration, api),
   );
@@ -180,6 +187,47 @@ export const unregisterCanvasTools = () => {
     }
   }
   registered = [];
+  providerApi = null;
+};
+
+/**
+ * Resolve a declared tool to something callable.
+ *
+ * `registered` is a module-level cache, and there are two ways for it to go
+ * empty while the page is very much still a working tool provider. A dev hot
+ * reload re-evaluates this module, resetting the array while the provider
+ * object living on `navigator` keeps the real registry. And the registration
+ * effect is keyed on the editor API, so a transient change there runs the
+ * cleanup and leaves a window with nothing cached.
+ *
+ * Either way the tools ARE registered and the canvas IS reachable, so failing
+ * the call would be a lie told on the strength of our own bookkeeping. This
+ * was not theoretical: it surfaced as every tool call in a session returning
+ * `declared but not registered yet` until the page was reloaded.
+ *
+ * So: prefer the cache, fall back to the live registry, and rebuild the cache
+ * from the canvas as a last resort.
+ */
+const findTool = (name: string): WebMcpTool | undefined => {
+  const cached = registered.find((candidate) => candidate.name === name);
+  if (cached) {
+    return cached;
+  }
+
+  const live = (navigator as any).modelContext?.__tools as
+    | WebMcpTool[]
+    | undefined;
+  const fromRegistry = live?.find((candidate) => candidate.name === name);
+  if (fromRegistry) {
+    return fromRegistry;
+  }
+
+  if (providerApi) {
+    registerCanvasTools(providerApi);
+    return registered.find((candidate) => candidate.name === name);
+  }
+
+  return undefined;
 };
 
 export const getProviderMode = (): ProviderMode => mode;
@@ -202,7 +250,7 @@ export const callTool = async (
     return { ok: false, error: `Unknown tool "${name}".` };
   }
 
-  const tool = registered.find((candidate) => candidate.name === name);
+  const tool = findTool(name);
   if (!tool) {
     return {
       ok: false,

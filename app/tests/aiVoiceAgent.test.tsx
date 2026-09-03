@@ -161,7 +161,7 @@ describe("VoiceAgent", () => {
     socket.emit({
       type: "response.function_call_arguments.done",
       call_id: "call_1",
-      name: "add_rectangle",
+      name: "add_shape",
       arguments: JSON.stringify({
         x: 200,
         y: 120,
@@ -194,7 +194,7 @@ describe("VoiceAgent", () => {
   it("coalesces several tool calls in one response into a single continuation", async () => {
     // Regression: instrumenting the live socket while drawing a 3-tier diagram
     // showed the model routinely batching several tool calls into ONE
-    // response — 3 add_rectangle calls in one response, 4 bind_arrow calls in
+    // response — 3 add_shape calls in one response, 4 bind_arrow calls in
     // another. Firing response.create after every individual result raced the
     // still-open response and the API answered with
     // "conversation_already_has_active_response". The fix defers the
@@ -209,7 +209,7 @@ describe("VoiceAgent", () => {
         type: "response.function_call_arguments.done",
         response_id: "resp_1",
         call_id: `call_${label}`,
-        name: "add_rectangle",
+        name: "add_shape",
         arguments: JSON.stringify({
           x: 200,
           y: 120,
@@ -253,7 +253,7 @@ describe("VoiceAgent", () => {
       type: "response.function_call_arguments.done",
       response_id: "resp_1",
       call_id: "call_slow",
-      name: "add_rectangle",
+      name: "add_shape",
       arguments: JSON.stringify({
         x: 0,
         y: 0,

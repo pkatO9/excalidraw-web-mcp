@@ -2,7 +2,11 @@ import { WebSocketServer, WebSocket } from "ws";
 
 import { resolveTools, TOOL_SCHEMAS } from "./toolSchemas.js";
 import { runThink, THINK_TOOL, thinkDeployment } from "./thinkTool.js";
-import { toRealtimeTools, VOICE_SYSTEM_PROMPT } from "./voicePrompt.js";
+import {
+  toRealtimeTools,
+  VOICE_EXCLUDED_TOOLS,
+  VOICE_SYSTEM_PROMPT,
+} from "./voicePrompt.js";
 
 const API_VERSION =
   process.env.AZURE_OPENAI_REALTIME_API_VERSION || "2025-04-01-preview";
@@ -97,7 +101,16 @@ export const attachRealtime = (httpServer) => {
             output_audio_format: "pcm16",
             // Whisper gives us the user's words for the on-screen transcript;
             // the model itself hears the audio directly either way.
-            input_audio_transcription: { model: "whisper-1" },
+            //
+            // The language is pinned rather than auto-detected. Left to itself
+            // Whisper reads accented English as the speaker's first language and
+            // writes the transcript in that script — which is wrong on screen and
+            // wrong in the history the typed agent later reads. Override with
+            // TRANSCRIPTION_LANGUAGE (an ISO-639-1 code) to demo in another one.
+            input_audio_transcription: {
+              model: "whisper-1",
+              language: process.env.TRANSCRIPTION_LANGUAGE || "en",
+            },
             // Server-side VAD makes it hands-free and, with interrupt_response,
             // lets the user talk over the agent to cut it off — which is most of
             // what makes a spoken agent feel live rather than turn-based.
@@ -117,7 +130,9 @@ export const attachRealtime = (httpServer) => {
             // here anyway — that is the whole point of talking to it.
             tools: [
               ...toRealtimeTools(
-                canvasTools.filter((tool) => tool.name !== "teach_diagram"),
+                canvasTools.filter(
+                  (tool) => !VOICE_EXCLUDED_TOOLS.includes(tool.name),
+                ),
               ),
               // Handled here rather than in the browser: it needs no canvas
               // access, only another model, so round-tripping it to the client

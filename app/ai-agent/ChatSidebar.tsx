@@ -500,6 +500,7 @@ const describeCall = (name: string, input: any, result?: any): string => {
   switch (name) {
     case "get_scene":
       return "read the canvas";
+    case "add_shape":
     case "add_rectangle":
       return `added “${input.label}” at (${input.x}, ${input.y})`;
     case "add_text":

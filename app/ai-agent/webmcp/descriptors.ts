@@ -35,7 +35,7 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
   {
     name: "create_diagram",
     description:
-      "Draw a whole diagram in one call from its STRUCTURE — the boxes and what connects to what — and let the layout engine place everything. USE THIS FOR ANY REQUEST THAT MEANS BUILDING A DIAGRAM OR A SUBSYSTEM, even a small one. Do not place boxes one at a time and connect them afterwards: that reliably produces arrows cutting across boxes, because when each box is positioned the connections it will carry are not known yet. This tool sees the whole graph, so it ranks the nodes into layers, orders them to minimise crossings, and routes long arrows around whatever sits between. Keep add_rectangle and bind_arrow for small edits to a diagram that already exists.",
+      "Draw a whole diagram in one call from its STRUCTURE — the boxes and what connects to what — and let the layout engine place everything. USE THIS FOR ANY REQUEST THAT MEANS BUILDING A DIAGRAM OR A SUBSYSTEM, even a small one. Do not place boxes one at a time and connect them afterwards: that reliably produces arrows cutting across boxes, because when each box is positioned the connections it will carry are not known yet. This tool sees the whole graph, so it ranks the nodes into layers, orders them to minimise crossings, and routes long arrows around whatever sits between. Keep add_shape and bind_arrow for small edits to a diagram that already exists.",
     inputSchema: {
       type: "object",
       properties: {
@@ -99,9 +99,9 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
   },
   {
-    name: "add_rectangle",
+    name: "add_shape",
     description:
-      "Add a labelled rectangle. x/y are the top-left corner. Use this for every box in an architecture diagram (services, load balancers, databases, caches). Collision is handled for you: if the spot you ask for is taken, the box is placed at the nearest free position instead and the response tells you where it actually landed — so boxes can never overlap. ALWAYS use the x/y in the response, not the ones you requested, when positioning anything relative to this box. Returns the new element's id, which you need for bind_arrow.",
+      "Add a single labelled shape. x/y are the top-left corner. Use this for every box in an architecture diagram (services, load balancers, databases, caches), and for adding one decision diamond or start/end ellipse to a diagram that already exists. Collision is handled for you: if the spot you ask for is taken, the box is placed at the nearest free position instead and the response tells you where it actually landed — so boxes can never overlap. ALWAYS use the x/y in the response, not the ones you requested, when positioning anything relative to this box. Returns the new element's id, which you need for bind_arrow.",
     inputSchema: {
       type: "object",
       properties: {
@@ -123,7 +123,13 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
         },
         label: {
           type: "string",
-          description: "Text shown centred inside the rectangle.",
+          description: "Text shown centred inside the shape.",
+        },
+        shape: {
+          type: "string",
+          enum: ["rectangle", "diamond", "ellipse"],
+          description:
+            "rectangle for a service, component or store (the default); diamond for a decision or branch; ellipse for a start or end point.",
         },
         backgroundColor: {
           type: "string",
@@ -139,7 +145,7 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
           type: "string",
           enum: ["solid", "hachure", "cross-hatch"],
           description:
-            "OPTIONAL fill rendering. Defaults to 'hachure' (single-line sketchy shading) — leave it out unless the user asks for a 'solid' filled look or 'cross-hatch'.",
+            "OPTIONAL fill rendering. Defaults to 'solid' — leave it out unless the user asks for 'hachure' (single-line sketchy shading) or 'cross-hatch'.",
         },
       },
       required: ["x", "y", "width", "height", "label"],
@@ -148,7 +154,7 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
   {
     name: "add_text",
     description:
-      "Add a standalone text element at exact coordinates, for diagram titles, captions or notes that are NOT attached to a shape. To put text inside a box, pass `label` to add_rectangle instead.",
+      "Add a standalone text element at exact coordinates, for diagram titles, captions or notes that are NOT attached to a shape. To put text inside a box, pass `label` to add_shape instead.",
     inputSchema: {
       type: "object",
       properties: {
@@ -171,7 +177,7 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
   {
     name: "bind_arrow",
     description:
-      "Draw an arrow between two elements that already exist, using Excalidraw's native binding so the arrow snaps cleanly to both shapes' edges and stays attached if they move. Pass element ids (from get_scene or from add_rectangle's return value) — never coordinates. The arrow points from source to target.",
+      "Draw an arrow between two elements that already exist, using Excalidraw's native binding so the arrow snaps cleanly to both shapes' edges and stays attached if they move. Pass element ids (from get_scene or from add_shape's return value) — never coordinates. The arrow points from source to target.",
     inputSchema: {
       type: "object",
       properties: {
@@ -214,7 +220,7 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
           type: "string",
           enum: ["solid", "hachure", "cross-hatch"],
           description:
-            "How the fill is drawn. Defaults to 'hachure' (single-line sketchy shading).",
+            "How the fill is drawn. Defaults to 'solid'; 'hachure' is single-line sketchy shading.",
         },
       },
       required: ["ids"],

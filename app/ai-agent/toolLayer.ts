@@ -170,7 +170,7 @@ const hits = (box: Box, obstacles: readonly Box[]) =>
  *
  * The model is good at expressing intent ("put the cache to the right of the
  * database") and bad at collision-checking a canvas with thirty elements on it,
- * especially since it issues a whole batch of add_rectangle calls at once and
+ * especially since it issues a whole batch of add_shape calls at once and
  * only sees the results afterwards. So the tool layer guarantees the invariant
  * instead: the requested spot is honoured when it is free, and otherwise we
  * search outward on a grid and take the nearest opening. The model's layout
@@ -335,8 +335,8 @@ export const get_scene = (
 /**
  * ```json
  * {
- *   "name": "add_rectangle",
- *   "description": "Add a labelled rectangle at exact canvas coordinates. x/y are the top-left corner. Use it for boxes in an architecture diagram (services, databases, load balancers).",
+ *   "name": "add_shape",
+ *   "description": "Add a single labelled shape at exact canvas coordinates. x/y are the top-left corner. Use it for boxes in an architecture diagram (services, databases, load balancers), and for adding one decision diamond or start/end ellipse to a diagram that already exists.",
  *   "input_schema": {
  *     "type": "object",
  *     "properties": {
@@ -344,7 +344,8 @@ export const get_scene = (
  *       "y": { "type": "number", "description": "Top-left y coordinate." },
  *       "width": { "type": "number", "description": "Width in pixels. Use 180 unless the label needs more." },
  *       "height": { "type": "number", "description": "Height in pixels. Use 80 unless the label needs more." },
- *       "label": { "type": "string", "description": "Text shown centred inside the rectangle." }
+ *       "label": { "type": "string", "description": "Text shown centred inside the shape." },
+ *       "shape": { "type": "string", "enum": ["rectangle", "diamond", "ellipse"], "description": "rectangle for a service, component or store (the default); diamond for a decision or branch; ellipse for a start or end point." }
  *     },
  *     "required": ["x", "y", "width", "height", "label"]
  *   }
@@ -362,7 +363,27 @@ export const add_rectangle = (
     shape?: DiagramShape;
   } & ElementStyle,
 ) => {
-  const { width, height, label, shape = "rectangle", ...style } = args;
+  const {
+    width: askedWidth,
+    height: askedHeight,
+    label,
+    shape = "rectangle",
+    ...style
+  } = args;
+
+  // A diamond only has its full width at the vertical midpoint, so a box sized
+  // for a rectangle wraps the label to pieces inside one — "Payment OK?" comes
+  // out as "Paymen / t OK?". create_diagram already sizes diamonds for their
+  // label; this path has to as well, or the same shape is fine in a generated
+  // diagram and mangled when added to one. Only ever grows the box, so an
+  // explicit larger size still wins.
+  const needsLabelRoom = shape === "diamond" && Boolean(label);
+  const width = needsLabelRoom
+    ? Math.max(askedWidth, widthForLabel(label!, shape))
+    : askedWidth;
+  const height = needsLabelRoom
+    ? Math.max(askedHeight, heightForShape(shape))
+    : askedHeight;
 
   // Resolve a non-overlapping position before creating anything, so the
   // invariant holds even when the model fires a whole batch of adds at once.
@@ -445,7 +466,7 @@ export const add_rectangle = (
  * ```json
  * {
  *   "name": "add_text",
- *   "description": "Add a standalone text element at exact coordinates — for diagram titles, captions or notes that are NOT attached to a shape. To label a shape, pass the label to add_rectangle instead.",
+ *   "description": "Add a standalone text element at exact coordinates — for diagram titles, captions or notes that are NOT attached to a shape. To label a shape, pass the label to add_shape instead.",
  *   "input_schema": {
  *     "type": "object",
  *     "properties": {
@@ -665,7 +686,7 @@ const heightForShape = (shape: DiagramShape) =>
  * ```json
  * {
  *   "name": "create_diagram",
- *   "description": "Draw a whole diagram in one call from its STRUCTURE — the boxes and what connects to what — and let the layout engine decide the geometry. Use this for any request that means building a diagram or a subsystem, rather than adding boxes one at a time. Placing boxes individually cannot avoid arrows crossing them, because when each box is positioned the connections it will carry do not exist yet; this tool knows the whole graph up front, so it can rank the nodes, order them to minimise crossings, and route long arrows around whatever sits between. Keep add_rectangle and bind_arrow for small edits to a diagram that already exists.",
+ *   "description": "Draw a whole diagram in one call from its STRUCTURE — the boxes and what connects to what — and let the layout engine decide the geometry. Use this for any request that means building a diagram or a subsystem, rather than adding boxes one at a time. Placing boxes individually cannot avoid arrows crossing them, because when each box is positioned the connections it will carry do not exist yet; this tool knows the whole graph up front, so it can rank the nodes, order them to minimise crossings, and route long arrows around whatever sits between. Keep add_shape and bind_arrow for small edits to a diagram that already exists.",
  *   "input_schema": {
  *     "type": "object",
  *     "properties": {
