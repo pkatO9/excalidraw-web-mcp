@@ -79,11 +79,6 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
                 type: "string",
                 description: "key of the target node.",
               },
-              label: {
-                type: "string",
-                description:
-                  "OPTIONAL one or two words riding on the arrow, naming what flows along it — a protocol ('HTTP', 'gRPC'), an action ('reads from', 'publishes to') or the outcome of a decision ('yes', 'no'). It sits in the gap between two boxes, so keep it short. Label only the edges where it adds something: labelling all of them makes a diagram harder to read, and on a long arrow that routes around other boxes the label can land close to them.",
-              },
             },
             required: ["from", "to"],
           },
@@ -182,7 +177,7 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
   {
     name: "bind_arrow",
     description:
-      "Draw an arrow between two elements that already exist, using Excalidraw's native binding so the arrow snaps cleanly to both shapes' edges and stays attached if they move. Pass element ids (from get_scene or from add_shape's return value) — never coordinates. The arrow points from source to target. Optionally give it a label naming what travels along it.",
+      "Draw an arrow between two elements that already exist, using Excalidraw's native binding so the arrow snaps cleanly to both shapes' edges and stays attached if they move. Pass element ids (from get_scene or from add_shape's return value) — never coordinates. The arrow points from source to target.",
     inputSchema: {
       type: "object",
       properties: {
@@ -193,11 +188,6 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
         target_id: {
           type: "string",
           description: "id of the element the arrow points to.",
-        },
-        label: {
-          type: "string",
-          description:
-            "OPTIONAL text riding on the arrow, naming what flows along it — a protocol ('HTTP', 'gRPC'), an action ('reads from', 'publishes to') or a condition ('yes', 'no' out of a decision diamond). Keep it to one or two words: it sits in the gap between two boxes, so a sentence will collide with them. Leave it out when the arrow is self-explanatory — labelling every arrow in a diagram makes it harder to read, not easier.",
         },
       },
       required: ["source_id", "target_id"],
