@@ -51,28 +51,185 @@
     }
   }
 
-  &__title {
+  // Name over tagline, so the panel introduces itself in one glance and the
+  // header still fits the badge and the close button on a narrow sidebar.
+  &__brand {
+    display: flex;
+    flex-direction: column;
+    gap: 0.05rem;
+    min-width: 0;
+  }
+
+  &__wordmark {
+    font-size: 1rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    line-height: 1.1;
+  }
+
+  &__tagline {
+    font-size: 0.65rem;
     font-weight: 600;
+    letter-spacing: 0.01em;
+    line-height: 1.1;
+    color: var(--color-gray-60);
   }
 
   // Says plainly whether the browser implements WebMCP or we are on the shim,
-  // so nobody has to guess — and so a demo cannot imply native support.
+  // so nobody has to guess — and so a demo cannot imply native support. It is
+  // a button because the next question is always "which tools?".
   &__webmcp {
     margin-left: auto;
-    padding: 0.1rem 0.4rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.15rem 0.4rem;
     border-radius: 0.35rem;
+    font-family: inherit;
     font-size: 0.65rem;
     font-weight: 600;
     letter-spacing: 0.02em;
     white-space: nowrap;
+    cursor: pointer;
     border: 1px solid var(--color-gray-30);
+    background: transparent;
     color: var(--color-gray-60);
+    transition: background-color 120ms ease, border-color 120ms ease;
+
+    &:hover {
+      background: var(--color-gray-10, rgba(0, 0, 0, 0.03));
+    }
 
     &--native {
       border-color: var(--color-primary);
       background: var(--color-primary-light);
       color: var(--color-primary-darker);
+
+      &:hover {
+        background: var(--color-primary-light);
+        border-color: var(--color-primary-darker);
+      }
     }
+
+    &[aria-expanded="true"] .ai-chat__webmcp-chevron {
+      transform: rotate(180deg);
+    }
+  }
+
+  &__webmcp-chevron {
+    flex-shrink: 0;
+    opacity: 0.7;
+    transition: transform 140ms ease;
+  }
+
+  // The manifest, as an agent would discover it. Anchored to .sidebar__header,
+  // which is already `position: relative`, and inset to the header's gutters —
+  // .sidebar clips its overflow, so a popover that hangs outside the panel
+  // would simply be cut in half.
+  &__tools {
+    position: absolute;
+    top: calc(100% - 0.35rem);
+    left: 0.75rem;
+    right: 0.75rem;
+    z-index: 5;
+
+    max-height: min(24rem, 55vh);
+    overflow-y: auto;
+    padding: 0.6rem;
+
+    background: var(--island-bg-color);
+    border: 1px solid var(--color-gray-30);
+    border-radius: var(--border-radius-lg);
+    box-shadow: var(--shadow-island-stronger);
+
+    // The header sets it for the title; the list is meant to be read and copied.
+    user-select: text;
+    cursor: auto;
+  }
+
+  &__tools-lede {
+    margin: 0 0 0.5rem;
+    font-size: 0.7rem;
+    line-height: 1.4;
+    color: var(--color-gray-60);
+
+    code {
+      font-size: 0.66rem;
+      padding: 0.05rem 0.2rem;
+      border-radius: 0.25rem;
+      background: var(--color-primary-light);
+      color: var(--color-primary-darker);
+    }
+  }
+
+  &__tools-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+  }
+
+  &__tool {
+    padding: 0.35rem 0.4rem;
+    border-radius: 0.4rem;
+    transition: background-color 120ms ease;
+
+    &:hover {
+      background: var(--color-primary-light);
+    }
+  }
+
+  &__tool-head {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+  }
+
+  // Monospace for the identifiers only: these are things an agent types, not
+  // prose, and the shift says so without a label.
+  &__tool-name {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.73rem;
+    font-weight: 600;
+    color: var(--color-primary-darker);
+  }
+
+  &__tool-params {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.2rem;
+  }
+
+  &__tool-param {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.58rem;
+    line-height: 1.5;
+    padding: 0 0.25rem;
+    border-radius: 0.25rem;
+    border: 1px dashed var(--color-gray-40);
+    color: var(--color-gray-60);
+
+    &--required {
+      border-style: solid;
+      border-color: var(--color-primary);
+      color: var(--color-primary-darker);
+    }
+  }
+
+  &__tool-description {
+    margin: 0.15rem 0 0;
+    font-size: 0.7rem;
+    line-height: 1.35;
+    color: var(--color-gray-60);
+
+    // Written for a model, so they run long; the full text is in the tooltip.
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
 
   &__transcript {
@@ -376,6 +533,8 @@
     line-height: 1;
     cursor: pointer;
 
+    gap: 0.3rem;
+
     background-color: var(--color-primary);
     color: var(--color-surface-lowest);
     border: 1px solid var(--color-primary);
@@ -391,6 +550,12 @@
       background-color: var(--color-primary-darkest);
       border-color: var(--color-primary-darkest);
     }
+  }
+
+  &__toggle-icon {
+    flex-shrink: 0;
+    // Optically centres the star against the cap height of "AI".
+    margin-top: -1px;
   }
 }
 

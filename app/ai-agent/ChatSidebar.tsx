@@ -14,12 +14,16 @@ import {
   toolsForModel,
   unregisterCanvasTools,
 } from "./webmcp/provider";
+
+import { ProviderBadge } from "./ProviderBadge";
 import { TutorControls } from "./TutorControls";
 import { VoiceControls } from "./VoiceControls";
 import { useDictation } from "./useDictation";
 import { useResizableSidebar } from "./useResizableSidebar";
 
 import "./ChatSidebar.scss";
+
+import type { ProviderStatus } from "./webmcp/provider";
 
 import type { SceneElementSummary } from "./toolLayer";
 import type { AgentMessage, ChatEntry } from "./types/chat";
@@ -108,10 +112,7 @@ export const AIChatSidebar = () => {
   const [busy, setBusy] = useState(false);
 
   const { references, dismiss, clear } = useSelectionReferences(excalidrawAPI);
-  const [provider, setProvider] = useState<{
-    mode: string;
-    count: number;
-  } | null>(null);
+  const [provider, setProvider] = useState<ProviderStatus | null>(null);
 
   // Declare the canvas to the browser for as long as the editor is mounted, so
   // an agent can discover it. Our own agents call the very same tools through
@@ -287,18 +288,12 @@ export const AIChatSidebar = () => {
   return (
     <Sidebar name={AI_SIDEBAR_NAME} docked>
       <Sidebar.Header>
-        <div className="ai-chat__title">AI Diagram Agent</div>
+        <div className="ai-chat__brand">
+          <span className="ai-chat__wordmark">Draftsmith</span>
+          <span className="ai-chat__tagline">powered by WebMCP</span>
+        </div>
         {provider && (
-          <span
-            className={`ai-chat__webmcp ai-chat__webmcp--${provider.mode}`}
-            title={
-              provider.mode === "native"
-                ? "This browser implements the WebMCP API (document.modelContext); the canvas is registered with it and any agent the browser trusts can discover these tools."
-                : "This browser has not exposed document.modelContext or navigator.modelContext, so a spec-shaped shim is in use. Same code path, but only this page can see the tools — an external agent cannot. If the browser or an extension provides one later, the canvas is handed over automatically and this switches to native."
-            }
-          >
-            WebMCP · {provider.mode} · {provider.count} tools
-          </span>
+          <ProviderBadge mode={provider.mode} count={provider.count} />
         )}
       </Sidebar.Header>
 
@@ -479,6 +474,29 @@ const MicIcon = () => (
  * Excalidraw+ and share buttons, and deliberately styled to match them rather
  * than floating over the canvas.
  */
+/**
+ * Drawn rather than imported: Excalidraw's icon set has no sparkle, and one
+ * four-point star in the editor's own stroke weight is cheaper than a
+ * dependency. Not a text node, so the button still reads as "AI".
+ */
+const SPARKLE = (
+  <svg
+    className="ai-chat__toggle-icon"
+    width="14"
+    height="14"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.75"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M12 3.5c.6 4.2 2.3 5.9 6.5 6.5-4.2.6-5.9 2.3-6.5 6.5-.6-4.2-2.3-5.9-6.5-6.5 4.2-.6 5.9-2.3 6.5-6.5Z" />
+    <path d="M18.5 16.5c.3 2 1.1 2.8 3.1 3.1-2 .3-2.8 1.1-3.1 3.1-.3-2-1.1-2.8-3.1-3.1 2-.3 2.8-1.1 3.1-3.1Z" />
+  </svg>
+);
+
 export const AIChatToggle = () => {
   const excalidrawAPI = useExcalidrawAPI();
 
@@ -490,9 +508,10 @@ export const AIChatToggle = () => {
     <button
       type="button"
       className="ai-chat__toggle"
-      title="Open the AI diagram agent"
+      title="Open Draftsmith — draw, restyle and be taught your diagram"
       onClick={() => excalidrawAPI.toggleSidebar({ name: AI_SIDEBAR_NAME })}
     >
+      {SPARKLE}
       AI
     </button>
   );
