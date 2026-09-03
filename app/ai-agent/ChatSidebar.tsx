@@ -293,8 +293,8 @@ export const AIChatSidebar = () => {
             className={`ai-chat__webmcp ai-chat__webmcp--${provider.mode}`}
             title={
               provider.mode === "native"
-                ? "This browser implements navigator.modelContext; the canvas is registered with it and any agent can discover these tools."
-                : "This browser has not exposed navigator.modelContext, so a spec-shaped shim is in use. Same code path, but only this page can see the tools — an external agent cannot. If the browser or an extension provides one later, the canvas is handed over automatically and this switches to native."
+                ? "This browser implements the WebMCP API (document.modelContext); the canvas is registered with it and any agent the browser trusts can discover these tools."
+                : "This browser has not exposed document.modelContext or navigator.modelContext, so a spec-shaped shim is in use. Same code path, but only this page can see the tools — an external agent cannot. If the browser or an extension provides one later, the canvas is handed over automatically and this switches to native."
             }
           >
             WebMCP · {provider.mode} · {provider.count} tools

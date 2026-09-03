@@ -11,10 +11,10 @@ import { registerCanvasTools } from "../ai-agent/webmcp/provider";
  * Stands in for a third-party agent.
  *
  * The point of WebMCP is that something which knows nothing about this app can
- * still drive it. So everything below reaches the canvas ONLY through
- * `navigator.modelContext` — no toolLayer import, no excalidrawAPI, no
- * knowledge that Excalidraw is involved at all. It discovers what it can do by
- * reading the manifest, the same way a browser agent would.
+ * still drive it. So everything below reaches the canvas ONLY through the
+ * page's model context — no toolLayer import, no excalidrawAPI, no knowledge
+ * that Excalidraw is involved at all. It discovers what it can do by reading
+ * the manifest, the same way a browser agent would.
  *
  * `get_scene` is used to verify the outcome, and is deliberately the only
  * privileged import here.
@@ -32,7 +32,11 @@ type DiscoveredTool = {
 
 /** Everything the page has declared to the browser. */
 const discoverTools = (): DiscoveredTool[] => {
-  const context = (navigator as any).modelContext;
+  // Chrome puts it on the document; the older draft and the polyfills put it
+  // on the navigator. An agent that only knew one of those would have called
+  // this page toolless.
+  const context =
+    (document as any).modelContext ?? (navigator as any).modelContext;
   if (!context) {
     throw new Error("This page is not a WebMCP tool provider.");
   }
@@ -64,6 +68,7 @@ describe("a third-party agent driving the canvas", () => {
 
   beforeEach(async () => {
     delete (navigator as any).modelContext;
+    delete (document as any).modelContext;
     const p = resolvablePromise<ExcalidrawImperativeAPI>();
     await render(<Excalidraw onExcalidrawAPI={(a) => p.resolve(a as any)} />);
     api = await p;

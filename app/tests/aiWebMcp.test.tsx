@@ -30,6 +30,7 @@ describe("WebMCP provider", () => {
 
   beforeEach(async () => {
     delete (navigator as any).modelContext;
+    delete (document as any).modelContext;
     const p = resolvablePromise<ExcalidrawImperativeAPI>();
     await render(<Excalidraw onExcalidrawAPI={(a) => p.resolve(a as any)} />);
     api = await p;
@@ -38,6 +39,7 @@ describe("WebMCP provider", () => {
   afterEach(() => {
     unregisterCanvasTools();
     delete (navigator as any).modelContext;
+    delete (document as any).modelContext;
   });
 
   it("declares every canvas tool on navigator.modelContext", () => {
@@ -81,6 +83,143 @@ describe("WebMCP provider", () => {
     expect(mode).toBe("native");
     expect(provideContext).toHaveBeenCalledTimes(1);
     expect(provideContext.mock.calls[0][0].tools).toHaveLength(count);
+  });
+
+  /**
+   * What Chrome 152 actually implements.
+   *
+   * Not what the explainer describes, and the difference is the whole bug this
+   * suite exists for: the API is `document.modelContext`, and it has no
+   * `provideContext` — tools go up one at a time through
+   * `registerTool(tool, { signal })` and come down by aborting that signal.
+   * Reading `navigator.modelContext` and calling `provideContext` on it, the
+   * page was a WebMCP provider to nobody but itself, on every origin, in a
+   * browser that supported it perfectly well.
+   */
+  describe("the platform API as Chrome ships it", () => {
+    /** Stands in for `document.modelContext`: registerTool only, no batch. */
+    const nativeChrome = () => {
+      const tools: any[] = [];
+      const registerTool = vi.fn(
+        (tool: any, options?: { signal?: AbortSignal }) => {
+          if (tools.some((existing) => existing.name === tool.name)) {
+            throw new DOMException(
+              `duplicate ${tool.name}`,
+              "InvalidStateError",
+            );
+          }
+          tools.push(tool);
+          options?.signal?.addEventListener("abort", () => {
+            const at = tools.indexOf(tool);
+            if (at >= 0) {
+              tools.splice(at, 1);
+            }
+          });
+          return Promise.resolve();
+        },
+      );
+      return { registerTool, tools };
+    };
+
+    it("registers with document.modelContext, not just navigator", () => {
+      const native = nativeChrome();
+      (document as any).modelContext = native;
+
+      const { mode, count } = registerCanvasTools(api);
+
+      expect(mode).toBe("native");
+      expect(count).toBe(TOOL_DECLARATIONS.length);
+      expect(native.tools.map((t) => t.name).sort()).toEqual(
+        TOOL_DECLARATIONS.map((t) => t.name).sort(),
+      );
+    });
+
+    it("prefers the document over a stale navigator implementation", () => {
+      const onDocument = nativeChrome();
+      const onNavigator = nativeChrome();
+      (document as any).modelContext = onDocument;
+      (navigator as any).modelContext = onNavigator;
+
+      registerCanvasTools(api);
+
+      expect(onDocument.tools).toHaveLength(TOOL_DECLARATIONS.length);
+      expect(onNavigator.tools).toHaveLength(0);
+    });
+
+    it("declares tools in the shape Chrome validates", () => {
+      const native = nativeChrome();
+      (document as any).modelContext = native;
+
+      registerCanvasTools(api);
+
+      // Chrome rejects a declaration whose inputSchema is not an object type,
+      // whose `properties` is not an object, or whose `required` is not an
+      // array — and a rejected declaration is a tool no agent can call.
+      expect(native.tools).toHaveLength(TOOL_DECLARATIONS.length);
+      for (const tool of native.tools) {
+        expect(typeof tool.name).toBe("string");
+        expect(typeof tool.description).toBe("string");
+        expect(tool.inputSchema.type).toBe("object");
+        expect(typeof tool.inputSchema.properties).toBe("object");
+        expect(Array.isArray(tool.inputSchema.required)).toBe(true);
+        expect(typeof tool.execute).toBe("function");
+      }
+    });
+
+    it("withdraws by aborting the signal, so a remount is not a duplicate", () => {
+      const native = nativeChrome();
+      (document as any).modelContext = native;
+
+      // The editor remounting re-registers the same eight names. Chrome throws
+      // InvalidStateError on a duplicate and there is no unregisterTool to
+      // call, so the signal is the only way back out.
+      registerCanvasTools(api);
+      expect(() => registerCanvasTools(api)).not.toThrow();
+
+      expect(native.tools).toHaveLength(TOOL_DECLARATIONS.length);
+      expect(native.tools.map((t) => t.name)).toHaveLength(
+        new Set(native.tools.map((t) => t.name)).size,
+      );
+
+      unregisterCanvasTools();
+      expect(native.tools).toHaveLength(0);
+    });
+
+    it("runs a real canvas edit through the tool Chrome was handed", async () => {
+      const native = nativeChrome();
+      (document as any).modelContext = native;
+      registerCanvasTools(api);
+
+      // Exactly what the browser's agent would hold: the declaration object
+      // Chrome received, invoked without going near our own code.
+      const addShape = native.tools.find((t) => t.name === "add_shape")!;
+      const result = await addShape.execute({
+        x: 60,
+        y: 60,
+        width: 180,
+        height: 80,
+        label: "From Chrome",
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(get_scene(api)[0]).toMatchObject({ label: "From Chrome" });
+    });
+
+    it("does not shadow the attribute when the platform defines it empty", () => {
+      // Chrome exposes the attribute; it just reads empty at this instant. An
+      // own property of ours would hide the real one for the life of the page.
+      Object.defineProperty(document, "modelContext", {
+        configurable: true,
+        get: () => undefined,
+      });
+
+      registerCanvasTools(api);
+
+      expect(
+        Object.getOwnPropertyDescriptor(document, "modelContext")?.get?.(),
+      ).toBeUndefined();
+      expect(getProviderMode()).toBe("shim");
+    });
   });
 
   /**
@@ -131,6 +270,24 @@ describe("WebMCP provider", () => {
 
       expect(seen).toContain("shim");
       expect(seen[seen.length - 1]).toBe("native");
+    });
+
+    it("adopts one that appears on document after the editor registered", () => {
+      vi.useFakeTimers();
+      try {
+        registerCanvasTools(api);
+        expect(getProviderMode()).toBe("shim");
+
+        const registerTool = vi.fn(() => Promise.resolve());
+        (document as any).modelContext = { registerTool };
+
+        vi.advanceTimersByTime(1000);
+
+        expect(getProviderMode()).toBe("native");
+        expect(registerTool).toHaveBeenCalledTimes(TOOL_DECLARATIONS.length);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("notices one installed with defineProperty rather than assignment", () => {

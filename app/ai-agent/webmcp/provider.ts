@@ -19,11 +19,24 @@ import type { ToolDeclaration } from "./descriptors";
  * WebMCP path is exercised on every single interaction rather than sitting
  * beside the real code path slowly rotting.
  *
- * Where the browser implements `navigator.modelContext`, we register with it
- * and an external agent can reach the same tools. Where it does not, we install
- * a shim with the same shape, so the app behaves identically and the code has
- * only one path. `getProviderMode()` reports which is in play; nothing else
- * needs to care.
+ * Where the browser implements the API we register with it and an external
+ * agent can reach the same tools. Where it does not, we install a shim with the
+ * same shape, so the app behaves identically and the code has only one path.
+ * `getProviderMode()` reports which is in play; nothing else needs to care.
+ *
+ * Two things about the platform API are not what the early proposal said, and
+ * both were found the hard way — by reading the strings in Chrome 152 rather
+ * than the explainer:
+ *
+ *   - It is `document.modelContext`, not `navigator.modelContext`. Chrome has a
+ *     `DocumentModelcontext` feature and an error message that names the path
+ *     outright: "document.modelContext cannot be used when document.domain is
+ *     enabled." We look in both places, because polyfills and the older draft
+ *     use `navigator` and there is no cost to checking.
+ *   - There is no `provideContext`. Chrome exposes `registerTool(tool, {signal})`
+ *     — one call per tool, asynchronous, and withdrawal is by aborting the
+ *     signal, not by an `unregisterTool` method. `publishTo` handles that shape
+ *     and the batch shape both.
  */
 
 /** Result shape WebMCP expects back from `execute`. */
@@ -38,11 +51,25 @@ export type WebMcpTool = ToolDeclaration & {
 
 export type ProviderMode = "native" | "shim";
 
+/** Chrome's `ModelContextRegisterToolOptions`. */
+type RegisterToolOptions = { signal?: AbortSignal };
+
 type ModelContextLike = {
+  /** The early draft, our shim, and most polyfills. */
   provideContext?: (context: { tools: WebMcpTool[] }) => void;
-  registerTool?: (tool: WebMcpTool) => void;
+  /** Chrome 152. Returns a promise; `signal` withdraws the tool. */
+  registerTool?: (tool: WebMcpTool, options?: RegisterToolOptions) => unknown;
+  /** Polyfills that predate the abort-signal withdrawal. */
   unregisterTool?: (name: string) => void;
+  getTools?: () => unknown;
 };
+
+/**
+ * Every object the API might hang off, in the order we trust them: the
+ * platform's own placement first.
+ */
+const hostObjects = (): any[] =>
+  typeof document === "undefined" ? [navigator] : [document, navigator];
 
 const SHIM_FLAG = "__excalidrawWebMcpShim";
 
@@ -54,6 +81,9 @@ let registered: WebMcpTool[] = [];
  * ever finds the local cache empty. See `findTool`.
  */
 let providerApi: ExcalidrawImperativeAPI | null = null;
+
+/** Aborting this withdraws the tools we registered one at a time. */
+let registrationAbort: AbortController | null = null;
 
 export type ProviderStatus = { mode: ProviderMode; count: number };
 
@@ -157,30 +187,49 @@ const installShim = (): ModelContextLike => {
   // Not a plain assignment. Something else may install the real thing after
   // us — a browser that exposes the API late, or an extension whose content
   // script is injected when the user activates it, which is well after the
-  // editor mounts. A plain assignment leaves our shim sitting on `navigator`
-  // as the answer to `if (!navigator.modelContext)`, so the injector either
-  // declines to install (the browser never learns this page has tools) or
-  // overwrites us and our declarations vanish with no re-register.
+  // editor mounts. A plain assignment leaves our shim sitting there as the
+  // answer to `if (!document.modelContext)`, so the injector either declines
+  // to install (the browser never learns this page has tools) or overwrites us
+  // and our declarations vanish with no re-register.
   //
   // An accessor makes the handover explicit: whoever assigns wins, and we
   // notice and hand our tools over. The property stays configurable, so an
   // injector that uses defineProperty instead of assignment also succeeds —
   // that case is caught by the poll in `startWatchingForNative`.
-  let current: ModelContextLike = shim;
-  try {
-    Object.defineProperty(navigator, "modelContext", {
-      configurable: true,
-      enumerable: true,
-      get: () => current,
-      set: (incoming: ModelContextLike) => {
-        current = incoming;
-        adoptIfNative();
-      },
-    });
-  } catch {
-    // Some engine refused the accessor; a plain assignment still gets the app
-    // working, just without the automatic handover.
-    (navigator as any).modelContext = shim;
+  // One holder behind every host, so `document.modelContext` and
+  // `navigator.modelContext` never disagree about what is installed.
+  const holder: { current: ModelContextLike } = { current: shim };
+
+  const installOn = (host: any) => {
+    // Never shadow a name the platform already defines. If Chrome has the
+    // attribute but it reads empty right now, an own property of ours would
+    // hide the real implementation for good — the worst outcome available.
+    if ("modelContext" in host) {
+      return;
+    }
+    try {
+      Object.defineProperty(host, "modelContext", {
+        configurable: true,
+        enumerable: true,
+        get: () => holder.current,
+        set: (incoming: ModelContextLike) => {
+          holder.current = incoming;
+          adoptIfNative();
+        },
+      });
+    } catch {
+      // Some engine refused the accessor; a plain assignment still gets the
+      // app working, just without the automatic handover.
+      try {
+        host.modelContext = shim;
+      } catch {
+        // and this host is simply not writable — try the next one
+      }
+    }
+  };
+
+  for (const host of hostObjects()) {
+    installOn(host);
   }
   return shim;
 };
@@ -195,20 +244,65 @@ const isShim = (context: unknown) => Boolean((context as any)?.[SHIM_FLAG]);
  * about are the ones already built for the live canvas.
  */
 const publishTo = (context: ModelContextLike) => {
+  // Withdraw the previous registration first. On a remount the same eight
+  // names go up again, and Chrome throws InvalidStateError on a duplicate.
+  withdrawRegistration();
+
   if (context.provideContext) {
     context.provideContext({ tools: registered });
-  } else if (context.registerTool) {
-    // Older shape: no batch call, so register one at a time and tolerate the
-    // duplicates a remount would otherwise throw on.
-    for (const tool of registered) {
-      try {
-        context.unregisterTool?.(tool.name);
-      } catch {
-        // nothing registered under that name yet
-      }
-      context.registerTool(tool);
+    return;
+  }
+
+  if (!context.registerTool) {
+    return;
+  }
+
+  // Chrome's shape: one call per tool, asynchronous, withdrawn by aborting the
+  // signal handed in with it.
+  const controller =
+    typeof AbortController === "undefined" ? null : new AbortController();
+  registrationAbort = controller;
+
+  for (const tool of registered) {
+    try {
+      // Polyfills that predate the signal offer this instead; harmless where
+      // nothing is registered under the name yet.
+      context.unregisterTool?.(tool.name);
+    } catch {
+      // nothing registered under that name yet
+    }
+
+    try {
+      const outcome = context.registerTool(
+        tool,
+        controller ? { signal: controller.signal } : undefined,
+      );
+      // registerTool is async: a rejection here is the browser refusing the
+      // declaration, which is worth saying out loud rather than swallowing.
+      void Promise.resolve(outcome).catch((error) =>
+        reportRegistrationFailure(tool.name, error),
+      );
+    } catch (error) {
+      reportRegistrationFailure(tool.name, error);
     }
   }
+};
+
+/**
+ * Tools are withdrawn by aborting the signal they were registered with — the
+ * platform has no `unregisterTool`.
+ */
+const withdrawRegistration = () => {
+  registrationAbort?.abort();
+  registrationAbort = null;
+};
+
+const reportRegistrationFailure = (name: string, error: unknown) => {
+  // eslint-disable-next-line no-console
+  console.warn(
+    `WebMCP: the browser refused the "${name}" tool declaration.`,
+    error,
+  );
 };
 
 /**
@@ -217,10 +311,8 @@ const publishTo = (context: ModelContextLike) => {
  * Returns whether the handover happened, so the poll can stop.
  */
 const adoptIfNative = () => {
-  const context = (navigator as any).modelContext as
-    | ModelContextLike
-    | undefined;
-  if (!context || isShim(context)) {
+  const context = nativeContext();
+  if (!context) {
     return false;
   }
 
@@ -289,16 +381,38 @@ const stopWatchingForNative = () => {
   }
 };
 
-const getModelContext = (): ModelContextLike => {
-  const existing = (navigator as any).modelContext as
-    | ModelContextLike
-    | undefined;
-  if (existing) {
-    mode = (existing as any)[SHIM_FLAG] ? "shim" : "native";
-    return existing;
+/** Whatever is currently installed, ours or the platform's. */
+const currentContext = (): ModelContextLike | undefined => {
+  for (const host of hostObjects()) {
+    const context = host?.modelContext as ModelContextLike | undefined;
+    if (context) {
+      return context;
+    }
   }
+  return undefined;
+};
+
+/** The platform's own implementation, if one of the hosts has it. */
+const nativeContext = (): ModelContextLike | undefined => {
+  for (const host of hostObjects()) {
+    const context = host?.modelContext as ModelContextLike | undefined;
+    if (context && !isShim(context)) {
+      return context;
+    }
+  }
+  return undefined;
+};
+
+const getModelContext = (): ModelContextLike => {
+  const native = nativeContext();
+  if (native) {
+    mode = "native";
+    return native;
+  }
+
+  const existing = currentContext();
   mode = "shim";
-  return installShim();
+  return existing ?? installShim();
 };
 
 /**
@@ -327,17 +441,18 @@ export const registerCanvasTools = (api: ExcalidrawImperativeAPI) => {
 };
 
 export const unregisterCanvasTools = () => {
-  const context = (navigator as any).modelContext as
-    | ModelContextLike
-    | undefined;
-  if (!context) {
-    return;
-  }
-  if (context.provideContext) {
+  withdrawRegistration();
+
+  const context = currentContext();
+  if (context?.provideContext) {
     context.provideContext({ tools: [] });
-  } else if (context.unregisterTool) {
+  } else if (context?.unregisterTool) {
     for (const tool of registered) {
-      context.unregisterTool(tool.name);
+      try {
+        context.unregisterTool(tool.name);
+      } catch {
+        // already gone
+      }
     }
   }
   registered = [];
@@ -370,9 +485,7 @@ const findTool = (name: string): WebMcpTool | undefined => {
     return cached;
   }
 
-  const live = (navigator as any).modelContext?.__tools as
-    | WebMcpTool[]
-    | undefined;
+  const live = (currentContext() as any)?.__tools as WebMcpTool[] | undefined;
   const fromRegistry = live?.find((candidate) => candidate.name === name);
   if (fromRegistry) {
     return fromRegistry;
