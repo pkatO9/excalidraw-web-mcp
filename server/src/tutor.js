@@ -1,3 +1,5 @@
+import { AzureOpenAI, OpenAI } from "openai";
+
 import { formatSceneContext } from "./systemPrompt.js";
 import { walkthroughSchema } from "./tutorSchema.js";
 
@@ -14,14 +16,25 @@ import { walkthroughSchema } from "./tutorSchema.js";
  * 3. `sanitizeLesson` validates the model's output like any untrusted input —
  *    shape via zod, then every element id against the real scene. Invented ids
  *    are dropped; a lesson about nothing real is rejected.
- * 4. The browser then narrates the lesson segment by segment using the
- *    browser's own speechSynthesis (see app/ai-agent/tutorSpeech.ts). Speech
- *    is entirely client-side, so this server has no audio concerns at all —
- *    it only produces the lesson text.
+ * 4. The browser then plays the lesson segment by segment, calling
+ *    /api/tutor/speech for each narration. `synthesizeSpeech` proxies OpenAI
+ *    TTS (gpt-4o-mini-tts) so the API key never reaches the browser.
+ *
+ * TTS credentials resolve in order: an Azure TTS deployment
+ * (AZURE_OPENAI_TTS_DEPLOYMENT on the existing Azure resource), else a plain
+ * OPENAI_API_KEY. `isTtsConfigured` gates the health flag, the frontend's
+ * Teach button, and the speech route's 503.
  */
 
-/** Upstream call gets a ceiling so a hung provider cannot pin a connection. */
+const TTS_DEFAULT_MODEL = "gpt-4o-mini-tts";
+const TTS_DEFAULT_VOICE = "nova";
+const TTS_DEFAULT_INSTRUCTIONS =
+  "Speak like a warm, patient teacher walking a student through a diagram on a whiteboard. Measured pace, friendly tone.";
+const AZURE_TTS_DEFAULT_API_VERSION = "2025-03-01-preview";
+
+/** Upstream calls get a ceiling so a hung provider cannot pin a connection. */
 const LESSON_TIMEOUT_MS = 120000;
+const SPEECH_TIMEOUT_MS = 60000;
 
 export const TUTOR_SYSTEM_PROMPT = `You are a patient, engaging tutor. You are given the contents of an Excalidraw canvas — a diagram a student has in front of them — and you teach them what it depicts, out loud, like a teacher at a whiteboard.
 
@@ -147,4 +160,71 @@ export const runTutorLesson = async (scene, loadProvider) => {
   }
 
   return sanitizeLesson(call.input, scene);
+};
+
+/** Whether any TTS credential set is present (gates health + speech route). */
+export const isTtsConfigured = () =>
+  Boolean(
+    (process.env.AZURE_OPENAI_TTS_DEPLOYMENT &&
+      process.env.AZURE_OPENAI_ENDPOINT &&
+      process.env.AZURE_OPENAI_API_KEY) ||
+      process.env.OPENAI_API_KEY,
+  );
+
+let ttsClient;
+let ttsModel;
+
+/**
+ * Lazily build the TTS client. This is deliberately a SECOND client, separate
+ * from the chat provider's: the existing AzureOpenAI instance is constructed
+ * with the chat deployment baked into its path, so audio requests through it
+ * would hit /deployments/<chat-model>/audio/speech and fail.
+ */
+const getTtsClient = () => {
+  if (ttsClient) {
+    return { client: ttsClient, model: ttsModel };
+  }
+
+  const azureDeployment = process.env.AZURE_OPENAI_TTS_DEPLOYMENT;
+  if (
+    azureDeployment &&
+    process.env.AZURE_OPENAI_ENDPOINT &&
+    process.env.AZURE_OPENAI_API_KEY
+  ) {
+    ttsClient = new AzureOpenAI({
+      endpoint: process.env.AZURE_OPENAI_ENDPOINT,
+      apiKey: process.env.AZURE_OPENAI_API_KEY,
+      apiVersion:
+        process.env.AZURE_OPENAI_TTS_API_VERSION ||
+        AZURE_TTS_DEFAULT_API_VERSION,
+      deployment: azureDeployment,
+    });
+    ttsModel = azureDeployment;
+  } else if (process.env.OPENAI_API_KEY) {
+    ttsClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    ttsModel = process.env.TTS_MODEL || TTS_DEFAULT_MODEL;
+  } else {
+    throw new Error(
+      "No TTS credentials configured. Set AZURE_OPENAI_TTS_DEPLOYMENT (with the Azure endpoint/key) or OPENAI_API_KEY.",
+    );
+  }
+
+  return { client: ttsClient, model: ttsModel };
+};
+
+/** Narration text -> spoken audio (mp3) as a Buffer. */
+export const synthesizeSpeech = async (text) => {
+  const { client, model } = getTtsClient();
+
+  const response = await client.audio.speech.create(
+    {
+      model,
+      input: text,
+      voice: process.env.TTS_VOICE || TTS_DEFAULT_VOICE,
+      instructions: process.env.TTS_INSTRUCTIONS || TTS_DEFAULT_INSTRUCTIONS,
+    },
+    { timeout: SPEECH_TIMEOUT_MS },
+  );
+
+  return Buffer.from(await response.arrayBuffer());
 };

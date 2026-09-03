@@ -1,12 +1,12 @@
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 
+import { API_BASE } from "./config";
 import {
   hideTutorCursor,
   segmentAnchors,
   showTutorCursor,
   tracePointer,
 } from "./tutorCursor";
-import { speak } from "./tutorSpeech";
 
 import type { SceneElementSummary } from "./toolLayer";
 import type { CursorPoint } from "./tutorCursor";
@@ -14,18 +14,12 @@ import type { TutorLesson, TutorPlaybackCallbacks } from "./types/tutor";
 
 /**
  * Lesson playback: sequences intro → segments → closing, keeping three things
- * in sync per chunk — the spoken narration, the tracing cursor, and the
- * transcript.
+ * in sync per chunk — the spoken audio, the tracing cursor, and the transcript.
  *
- * Speech comes from the browser (`tutorSpeech`), so there is no audio to fetch
- * or buffer and nothing to prefetch: each chunk is spoken straight from text.
- * The cost is that an utterance's length is unknowable up front, so the cursor
- * is paced by a words-per-minute estimate and cut short the moment speech
- * actually ends — which keeps it in step even when the estimate is wrong.
- *
- * Aborting (the Stop button, or the sidebar closing) is a user action, not an
- * error: playback resolves quietly, cancels the utterance, and removes the
- * cursor.
+ * Pipeline: while chunk N plays, chunk N+1's audio is already being fetched,
+ * so the tutor never pauses between sentences. Aborting (the Stop button or
+ * unmount) is a user action, not an error: playback resolves quietly, pauses
+ * the audio, removes the cursor, and revokes every object URL it created.
  */
 
 /** ~150 spoken words per minute; floor so one-word chunks still get a dwell. */
@@ -34,6 +28,71 @@ const MIN_CHUNK_MS = 1200;
 
 export const estimateSpeechMs = (text: string) =>
   Math.max(MIN_CHUNK_MS, text.trim().split(/\s+/).length * MS_PER_WORD);
+
+/** POST narration text to the backend TTS proxy; resolves to mp3 bytes. */
+const fetchSpeech = async (
+  text: string,
+  signal: AbortSignal,
+): Promise<Blob> => {
+  const response = await fetch(`${API_BASE}/api/tutor/speech`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text }),
+    signal,
+  });
+
+  if (!response.ok) {
+    let message: string | undefined;
+    try {
+      message = (await response.json())?.error;
+    } catch {
+      // non-JSON error body — fall through to the status-based message
+    }
+    throw new Error(message || `Speech request failed (${response.status}).`);
+  }
+
+  return response.blob();
+};
+
+/**
+ * Play one clip to the end. Resolves when the audio finishes OR the signal
+ * aborts (pausing the audio); rejects only on a genuine playback failure.
+ */
+const playClip = (audio: HTMLAudioElement, signal: AbortSignal) =>
+  new Promise<void>((resolve, reject) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+
+    const cleanup = () => {
+      audio.removeEventListener("ended", onEnded);
+      audio.removeEventListener("error", onError);
+      signal.removeEventListener("abort", onAbort);
+    };
+    const onEnded = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = () => {
+      cleanup();
+      reject(new Error("Audio playback failed in this browser."));
+    };
+    const onAbort = () => {
+      audio.pause();
+      cleanup();
+      resolve();
+    };
+
+    audio.addEventListener("ended", onEnded);
+    audio.addEventListener("error", onError);
+    signal.addEventListener("abort", onAbort);
+
+    audio.play().catch((error) => {
+      cleanup();
+      reject(error instanceof Error ? error : new Error(String(error)));
+    });
+  });
 
 /**
  * Bring the narrated elements into view. Navigation is a nicety: if the
@@ -54,6 +113,37 @@ const focusViewport = (api: ExcalidrawImperativeAPI, elementIds: string[]) => {
   }
 };
 
+/** How long to wait for audio metadata before falling back to an estimate. */
+const METADATA_TIMEOUT_MS = 1500;
+
+/**
+ * The clip's real length in ms, or a words-per-minute estimate if metadata
+ * does not arrive promptly (jsdom never fires `loadedmetadata`).
+ */
+const resolveClipDuration = (audio: HTMLAudioElement, narration: string) =>
+  new Promise<number>((resolve) => {
+    const fallback = estimateSpeechMs(narration);
+
+    const settle = (value: number) => {
+      clearTimeout(timer);
+      audio.removeEventListener("loadedmetadata", onLoaded);
+      resolve(value);
+    };
+    const onLoaded = () =>
+      settle(
+        Number.isFinite(audio.duration) && audio.duration > 0
+          ? audio.duration * 1000
+          : fallback,
+      );
+    const timer = setTimeout(() => settle(fallback), METADATA_TIMEOUT_MS);
+
+    if (Number.isFinite(audio.duration) && audio.duration > 0) {
+      settle(audio.duration * 1000);
+      return;
+    }
+    audio.addEventListener("loadedmetadata", onLoaded);
+  });
+
 type LessonChunk = { elementIds: string[]; narration: string };
 
 /** Flatten a lesson into narration chunks; intro/closing point at nothing. */
@@ -65,13 +155,14 @@ const toChunks = (lesson: TutorLesson): LessonChunk[] =>
   ].filter((chunk) => chunk.narration.trim().length > 0);
 
 /**
- * Speak one chunk while tracing its elements. Returns when the narration ends,
+ * Speak one chunk while tracing its elements. Returns when the audio ends,
  * along with where the cursor came to rest so the next chunk glides on from
  * there.
  */
 const playChunk = async (
   api: ExcalidrawImperativeAPI,
   chunk: LessonChunk,
+  audio: HTMLAudioElement,
   cursorEnabled: boolean,
   signal: AbortSignal,
   cursorFrom: CursorPoint | null,
@@ -91,8 +182,14 @@ const playChunk = async (
     showTutorCursor(api, cursorFrom ?? anchors[0]);
   }
 
-  // The trace gets its own signal so it stops the moment speech ends, rather
-  // than dwelling out the remainder of an estimate that ran long.
+  // Duration is only known once metadata loads, so wait briefly for it — a
+  // freshly constructed Audio always reports NaN. jsdom never fires the event,
+  // and a slow decode should not stall the lesson, hence the short race with a
+  // words-per-minute estimate as the fallback pace.
+  const traceMs = await resolveClipDuration(audio, chunk.narration);
+
+  // The trace gets its own signal so it stops the moment the audio ends,
+  // instead of dwelling out its estimated time.
   const traceController = new AbortController();
   const forwardAbort = () => traceController.abort();
   signal.addEventListener("abort", forwardAbort);
@@ -103,12 +200,12 @@ const playChunk = async (
         ? tracePointer(
             api,
             anchors,
-            estimateSpeechMs(chunk.narration),
+            traceMs,
             traceController.signal,
             cursorFrom,
           )
         : Promise.resolve(cursorFrom);
-    await speak(chunk.narration, signal);
+    await playClip(audio, signal);
     traceController.abort();
     return await trace;
   } finally {
@@ -143,21 +240,49 @@ export const playLesson = async (
   // cursor. The lesson still plays, just without the pointer. Sampled once at
   // lesson start: a session joined mid-lesson is not detected until the next.
   const cursorEnabled = (api.getAppState().collaborators?.size ?? 0) === 0;
+  const objectUrls: string[] = [];
 
   // Where the cursor rests between chunks, threaded through playChunk so it
   // glides on rather than teleporting — and so it never leaks between lessons.
   let cursorAt: CursorPoint | null = null;
 
   try {
-    for (const chunk of chunks) {
+    // Every prefetch carries a stray-rejection guard: if the loop exits early
+    // (abort) without awaiting one, its failure must not become an unhandled
+    // rejection. The guard never swallows an error the loop still awaits —
+    // `await` on an already-handled promise still sees the rejection.
+    let upcoming: Promise<Blob> | null = fetchSpeech(
+      chunks[0].narration,
+      signal,
+    );
+    upcoming.catch(() => {});
+
+    for (let i = 0; i < chunks.length; i++) {
       if (signal.aborted) {
         return;
       }
 
-      onNarration(chunk.narration);
+      const blob = await upcoming!;
+      // Prefetch the next chunk's audio while this one plays — this overlap is
+      // what makes the narration gapless.
+      upcoming =
+        i + 1 < chunks.length
+          ? fetchSpeech(chunks[i + 1].narration, signal)
+          : null;
+      upcoming?.catch(() => {});
+
+      if (signal.aborted) {
+        return;
+      }
+
+      onNarration(chunks[i].narration);
+
+      const url = URL.createObjectURL(blob);
+      objectUrls.push(url);
       cursorAt = await playChunk(
         api,
-        chunk,
+        chunks[i],
+        new Audio(url),
         cursorEnabled,
         signal,
         cursorAt,
@@ -167,6 +292,9 @@ export const playLesson = async (
   } finally {
     if (cursorEnabled) {
       hideTutorCursor(api);
+    }
+    for (const url of objectUrls) {
+      URL.revokeObjectURL(url);
     }
   }
 };

@@ -20,9 +20,9 @@ coordinates arithmetically from the elements that already exist.
 │  toolLayer.ts               │        │  (holds the API key) │
 │   ├─ excalidrawAPI ─► canvas│        │                      │
 │   └─ teach_diagram ─┐       │        │  /api/tutor/lesson   │
-│                     ▼       │        │   └─ walkthrough JSON│
-│  tutorSession ──────────────────────►└──────────────────────┘
-│   └─ speaks + traces cursor │
+│                     ▼       │        │  /api/tutor/speech   │
+│  tutorSession ──────────────────────►│   └─ OpenAI TTS      │
+│   └─ speaks + traces cursor │        └──────────────────────┘
 └─────────────────────────────┘
 ```
 
@@ -71,10 +71,10 @@ this project visible.
 
 ```
 app/ai-agent/     the fork's additions: toolLayer, ChatSidebar, the tutor
-                  (tutorSession, tutorPlayer, tutorSpeech, tutorCursor,
-                  TutorControls), hooks, types/
+                  (tutorSession, tutorPlayer, tutorCursor, TutorControls),
+                  hooks, types/
 app/tests/        unit + end-to-end tests
-server/           the chat-to-tool-call backend + the tutor lesson route
+server/           the chat-to-tool-call backend + tutor lesson/TTS routes
 setup.sh          clones Excalidraw and wires the sidebar into App.tsx
 excalidraw/       created by setup.sh — gitignored
 ```
@@ -403,18 +403,13 @@ The model's output is treated as untrusted input: zod checks the shape, then
 dropped, and a lesson about nothing real is rejected (`server/src/tutor.js`, unit-tested
 in `server/test/tutor.test.js`).
 
-**Voice** is the browser's own `speechSynthesis` — the mirror image of the mic in
-`useDictation`, same Web Speech API family. No key, no cost, no audio over the network,
-and it works the moment the page loads. `tutorSpeech.ts` wraps the three Chrome
-behaviours that bite: voices load asynchronously (so the first `getVoices()` is empty),
-long utterances are silently truncated after ~15s without a `resume()` ping, and
-`cancel()` surfaces as an `interrupted` error that is us stopping it rather than a
-failure. Browsers without the API simply never show the Teach button.
-
-The trade against a hosted model is that you get the OS voice rather than a tuned one,
-and that an utterance has no knowable duration up front — so the cursor is paced by a
-words-per-minute estimate and cut short the instant speech actually ends, which keeps it
-in step even when the estimate is wrong.
+**Voice** is OpenAI's `gpt-4o-mini-tts` (steerable delivery — the default instructions
+ask for a warm, patient teacher), proxied through `POST /api/tutor/speech` so the key
+never reaches the browser. Configure either a TTS deployment on the same Azure resource
+(`AZURE_OPENAI_TTS_DEPLOYMENT`, plus `AZURE_OPENAI_TTS_API_VERSION` — audio/speech needs
+a newer api-version than chat, hence the second client in `tutor.js`) or a plain
+`OPENAI_API_KEY`. Voice and delivery are `TTS_VOICE` / `TTS_INSTRUCTIONS`. With neither
+configured, `/api/health` reports `tts: false` and the Teach button simply never renders.
 
 **The tracing cursor** is Excalidraw's own machinery, not custom drawing: "Tutor" is a
 synthetic entry in the `collaborators` map — the same mechanism that renders a
@@ -556,13 +551,12 @@ yarn vitest run excalidraw-app/tests/aiAgent.e2e.test.tsx   # end-to-end, needs 
 cd ../server && npm test    # lesson validation/sanitation unit tests, no network
 ```
 
-`aiTutor.test.tsx` installs a fake `speechSynthesis` (jsdom has none) whose `speak`
-parks a resolver instead of talking, so each test decides exactly when an utterance
-"finishes" and can assert on state *during* narration: chunk order, the Tutor cursor
-appearing and being removed, abort cleanup mid-lesson, an `interrupted` utterance
-treated as a stop rather than an error, and stale element ids not crashing the tracer.
-The tutor's live e2e case (every segment's ids exist in the scene) sits in
-`aiAgent.e2e.test.tsx` and self-skips unless the backend is up.
+`aiTutor.test.tsx` stubs what jsdom lacks (audio playback, object URLs) with manually
+triggered `ended` events, so it can assert on state *during* playback: narration order,
+the Tutor cursor appearing and being removed, abort cleanup mid-lesson, and stale
+element ids not crashing the tracer. The tutor's live e2e cases (lesson ids all real,
+`/api/tutor/speech` returns actual mpeg bytes) sit in `aiAgent.e2e.test.tsx` and
+self-skip unless `/api/health` reports `tts: true`.
 
 `aiToolLayer.test.tsx` mounts a real Excalidraw and exercises the scene-editing tools,
 including asserting that `bind_arrow` produces real bindings on both ends and that
@@ -611,15 +605,15 @@ from older versions.
 
 - `server/.env` is gitignored and holds the only copy of the credentials.
 - The Claude / Azure OpenAI call happens server-side only; no key is ever shipped to
-  the browser. Narration needs no key at all — the browser speaks it locally, so no
-  audio and no text ever leaves the machine for that.
+  the browser. The same is true of TTS: `/api/tutor/speech` proxies it, so the browser
+  only ever sees opaque mp3 bytes.
 - CORS is wide open for local development — lock it down before deploying.
-- `/api/tutor/lesson` spends money per call (one model turn) and has no auth, and open
-  CORS means any page visited while the server runs can reach it. So it is **rate
-  limited** (60/min per IP), the scene is capped at 300 elements and parsed against an
-  explicit field allowlist rather than passed through, and the upstream call carries a
-  timeout. These bound the bill; they are not a substitute for auth if this ever leaves
-  localhost.
+- The tutor routes spend money per call and have no auth, and open CORS means any page
+  visited while the server runs can reach them. So they are **rate limited** (60/min per
+  IP), the scene is capped at 300 elements and parsed against an explicit field allowlist
+  rather than passed through, narration is capped at 5000 characters, and upstream
+  provider calls carry timeouts. These bound the bill; they are not a substitute for auth
+  if this ever leaves localhost.
 - 500s return a generic message — provider errors name endpoints, deployments and quota
   state, so the detail stays in the server log. `helmet()` sets baseline headers.
 - **Security invariant worth preserving:** the tutor gets exactly one tool and it mutates

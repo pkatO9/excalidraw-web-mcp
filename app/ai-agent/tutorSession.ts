@@ -2,7 +2,6 @@ import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 
 import { API_BASE } from "./config";
 import { playLesson } from "./tutorPlayer";
-import { stopSpeaking } from "./tutorSpeech";
 
 import type { SceneElementSummary } from "./toolLayer";
 import type { TutorLesson } from "./types/tutor";
@@ -151,9 +150,6 @@ const runLesson = async (
       sinks?.onError(error instanceof Error ? error.message : String(error));
     }
   } finally {
-    // Belt and braces: `speak` cancels its own utterance on abort, but a
-    // failure between chunks could leave one queued in the browser.
-    stopSpeaking();
     if (controller === own) {
       controller = null;
       setTeaching(false);

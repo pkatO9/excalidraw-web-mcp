@@ -15,13 +15,18 @@ import { z } from "zod";
  * unauthenticated request can buy.
  */
 
-/** Longest a single spoken narration chunk may be. */
-export const MAX_NARRATION_CHARS = 5000;
+/** Longest narration the speech route will synthesize in one call. */
+export const MAX_SPEECH_CHARS = 5000;
 
 /** Most elements one lesson request may describe. */
 export const MAX_SCENE_ELEMENTS = 300;
 
 const MAX_LABEL_CHARS = 500;
+
+/** Body of POST /api/tutor/speech. */
+export const speechRequestSchema = z.object({
+  text: z.string().min(1).max(MAX_SPEECH_CHARS),
+});
 
 /**
  * One element as reported by the frontend's get_scene — only the fields the
@@ -54,7 +59,7 @@ export const walkthroughSchema = z.object({
     .array(
       z.object({
         elementIds: z.array(z.string().min(1)).min(1),
-        narration: z.string().min(1).max(MAX_NARRATION_CHARS),
+        narration: z.string().min(1).max(MAX_SPEECH_CHARS),
       }),
     )
     .min(1),

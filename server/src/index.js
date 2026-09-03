@@ -7,8 +7,8 @@ import helmet from "helmet";
 import { attachRealtime } from "./realtime.js";
 import { resolveTools } from "./toolSchemas.js";
 import { formatReferences, formatSceneContext } from "./systemPrompt.js";
-import { runTutorLesson } from "./tutor.js";
-import { lessonRequestSchema } from "./tutorSchema.js";
+import { isTtsConfigured, runTutorLesson, synthesizeSpeech } from "./tutor.js";
+import { lessonRequestSchema, speechRequestSchema } from "./tutorSchema.js";
 
 /**
  * Chat-to-tool-call backend for the Excalidraw AI diagramming agent.
@@ -40,9 +40,11 @@ app.use(cors(process.env.FRONTEND_ORIGIN ? { origin: process.env.FRONTEND_ORIGIN
 app.use(express.json({ limit: "5mb" }));
 
 /**
- * Generating a lesson is a model turn, and the route carries no auth, so a
- * per-IP budget is the only thing standing between an open CORS policy and an
- * unbounded provider bill. (Narration itself is free — the browser speaks it.)
+ * The tutor routes spend real money per call (a model turn, then one TTS
+ * synthesis per narration chunk) and carry no auth, so a per-IP budget is the
+ * only thing standing between an open CORS policy and an unbounded provider
+ * bill. A whole lesson is a handful of requests, so a real user never notices
+ * this ceiling.
  */
 const tutorLimiter = rateLimit({
   windowMs: 60_000,
@@ -74,6 +76,8 @@ app.get("/api/health", (_req, res) => {
         process.env.AZURE_OPENAI_ENDPOINT && process.env.AZURE_OPENAI_API_KEY,
       ),
     },
+    // Gates the frontend's Teach button and the tutor e2e test.
+    tts: isTtsConfigured(),
   });
 });
 
@@ -102,6 +106,36 @@ app.post("/api/tutor/lesson", async (req, res) => {
     return res.json({ lesson });
   } catch (error) {
     console.error("[/api/tutor/lesson]", error);
+    return res.status(500).json({ error: GENERIC_FAILURE });
+  }
+});
+
+/**
+ * Narration text -> spoken audio. Proxied server-side so the TTS key never
+ * reaches the browser. Body: { text }. Response: audio/mpeg bytes.
+ */
+app.post("/api/tutor/speech", async (req, res) => {
+  try {
+    if (!isTtsConfigured()) {
+      return res.status(503).json({
+        error:
+          "Text-to-speech is not configured. Set AZURE_OPENAI_TTS_DEPLOYMENT or OPENAI_API_KEY on the server.",
+      });
+    }
+
+    const parsed = speechRequestSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: "`text` must be a non-empty string of at most 5000 characters.",
+      });
+    }
+
+    const audio = await synthesizeSpeech(parsed.data.text);
+    res.setHeader("content-type", "audio/mpeg");
+    res.setHeader("x-content-type-options", "nosniff");
+    return res.send(audio);
+  } catch (error) {
+    console.error("[/api/tutor/speech]", error);
     return res.status(500).json({ error: GENERIC_FAILURE });
   }
 });

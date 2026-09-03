@@ -1,6 +1,7 @@
 import { useExcalidrawAPI } from "@excalidraw/excalidraw";
-import { useEffect, useMemo, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
+import { API_BASE } from "./config";
 import { get_scene } from "./toolLayer";
 import {
   isTeaching,
@@ -9,7 +10,6 @@ import {
   stopLesson,
   subscribeTutorSession,
 } from "./tutorSession";
-import { isSpeechSupported } from "./tutorSpeech";
 
 import type { ChatEntry } from "./types/chat";
 
@@ -36,13 +36,23 @@ export const TutorControls = ({
   onAssistantMessage,
 }: TutorControlsProps) => {
   const excalidrawAPI = useExcalidrawAPI();
+  const [available, setAvailable] = useState(false);
 
   const teaching = useSyncExternalStore(subscribeTutorSession, isTeaching);
 
-  // The voice is the browser's own, so support is a synchronous local check
-  // rather than a question for the backend — same as the mic in useDictation.
-  // Browsers without the Web Speech API just don't get the button.
-  const available = useMemo(() => isSpeechSupported(), []);
+  // Capability check: the Teach button only exists if the backend can speak.
+  // (The tool stays callable either way — it just reports the 503 as a tool
+  // error, which the model relays.)
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch(`${API_BASE}/api/health`, { signal: controller.signal })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => setAvailable(Boolean(data?.tts)))
+      .catch(() => {
+        // backend down or unreachable — the button simply stays hidden
+      });
+    return () => controller.abort();
+  }, []);
 
   // Point the session's output at this transcript for as long as we're mounted.
   useEffect(
