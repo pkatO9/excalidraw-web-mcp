@@ -10,6 +10,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
  * the mic button can be hidden entirely (Firefox users just see Send).
  */
 
+/**
+ * Dictation is pinned to English rather than following `navigator.language`.
+ *
+ * The browser locale is often not the language the user is speaking. On a
+ * machine set to en-IN or hi-IN, accented English was being recognised as
+ * Hindi and typed into the composer in Devanagari — the same failure the
+ * realtime transcript had before its language was pinned server-side. The
+ * whole app, its prompts and its tool descriptions are English, so English is
+ * the honest default.
+ */
+const DICTATION_LANGUAGE = "en-US";
+
 /** Chrome's built-in speech recognition, if this browser has it. */
 const getSpeechRecognition = (): any =>
   typeof window === "undefined"
@@ -50,7 +62,7 @@ export const useDictation = (
     }
 
     const recognition = new Recognition();
-    recognition.lang = navigator.language || "en-US";
+    recognition.lang = DICTATION_LANGUAGE;
     recognition.interimResults = true;
     recognition.continuous = false;
 

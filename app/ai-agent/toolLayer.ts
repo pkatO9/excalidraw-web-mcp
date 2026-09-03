@@ -505,12 +505,13 @@ export const add_text = (
  * ```json
  * {
  *   "name": "bind_arrow",
- *   "description": "Draw an arrow from one existing element to another, using Excalidraw's native binding so it snaps to both shapes' edges and stays attached when they move. Pass element ids from get_scene — never coordinates.",
+ *   "description": "Draw an arrow from one existing element to another, using Excalidraw's native binding so it snaps to both shapes' edges and stays attached when they move. Pass element ids from get_scene — never coordinates. Optionally label it with what flows along it.",
  *   "input_schema": {
  *     "type": "object",
  *     "properties": {
  *       "source_id": { "type": "string", "description": "id of the element the arrow starts at." },
- *       "target_id": { "type": "string", "description": "id of the element the arrow points to." }
+ *       "target_id": { "type": "string", "description": "id of the element the arrow points to." },
+ *       "label": { "type": "string", "description": "OPTIONAL short text riding on the arrow, e.g. \"HTTP\" or \"reads from\"." }
  *     },
  *     "required": ["source_id", "target_id"]
  *   }
@@ -537,10 +538,19 @@ export const bind_arrow = (
     strokeColor?: string;
     /** Pass null for a hard polyline; omitted means curved. */
     roundness?: { type: number } | null;
+    /** What flows along the arrow, e.g. "HTTP" or "reads from". */
+    label?: string;
   },
 ) => {
-  const { source_id, target_id, axis, waypoints, strokeColor, roundness } =
-    args;
+  const {
+    source_id,
+    target_id,
+    axis,
+    waypoints,
+    strokeColor,
+    roundness,
+    label,
+  } = args;
 
   if (source_id === target_id) {
     throw new Error("source_id and target_id must be different elements.");
@@ -590,6 +600,20 @@ export const bind_arrow = (
             : roundness,
         start: { id: source_id },
         end: { id: target_id },
+        // House style, as for shapes: the bound label is its own element and
+        // defaults to near-black, so it is told to match the arrow or a
+        // coloured flow gains a black word in the middle of it. One size down
+        // from a box label (20), because what flows along an arrow is
+        // subordinate to what sits in the boxes.
+        ...(label
+          ? {
+              label: {
+                text: label,
+                fontSize: ARROW_LABEL_FONT_SIZE,
+                ...(strokeColor ? { strokeColor } : {}),
+              },
+            }
+          : {}),
       },
     ] as ExcalidrawElementSkeleton[],
     { regenerateIds: false },
@@ -608,7 +632,15 @@ export const bind_arrow = (
     .getSceneElementsIncludingDeleted()
     .map((el) => rebuiltById.get(el.id) ?? el);
 
-  commit(api, [...next, arrow]);
+  // A label is a SEPARATE text element bound back to the arrow by containerId,
+  // not a field on it. Appending only the arrow would drop the label on the
+  // floor: the arrow would claim a boundElements entry pointing at a text
+  // element that never made it into the scene.
+  const boundLabel = converted.find(
+    (el) => el.type === "text" && (el as any).containerId === arrow.id,
+  );
+
+  commit(api, [...next, arrow, ...(boundLabel ? [boundLabel] : [])]);
 
   return {
     id: arrow.id,
@@ -616,6 +648,7 @@ export const bind_arrow = (
     source_id,
     target_id,
     bound: Boolean((arrow as any).startBinding && (arrow as any).endBinding),
+    ...(label ? { label } : {}),
   };
 };
 
@@ -683,6 +716,15 @@ const heightForShape = (shape: DiagramShape) =>
   shape === "diamond" ? 110 : 80;
 
 /**
+ * One step down from Excalidraw's default (20), which box labels use.
+ *
+ * An arrow label names the relationship, not the thing, so it should read as
+ * subordinate to the boxes it runs between — and it sits in the gap between
+ * them, where a full-size word is much more likely to touch something.
+ */
+const ARROW_LABEL_FONT_SIZE = 16;
+
+/**
  * ```json
  * {
  *   "name": "create_diagram",
@@ -731,7 +773,7 @@ export const create_diagram = (
       label: string;
       shape?: DiagramShape;
     } & ElementStyle)[];
-    edges: { from: string; to: string }[];
+    edges: { from: string; to: string; label?: string }[];
     direction?: "TB" | "LR";
     replace?: boolean;
   },
@@ -851,6 +893,12 @@ export const create_diagram = (
         // An arrow takes the colour of the box it leaves, so a flow can be
         // followed by eye without reading every label.
         strokeColor: tierOf(edge.from).strokeColor,
+        // Edge labels have to be honoured here, not just on bind_arrow. The
+        // prompt sends anything diagram-shaped to this tool, so a label
+        // supported only on the incremental path is one the model can almost
+        // never actually use — and it does not fail loudly, it reports back
+        // that it labelled an arrow it did not label.
+        label: edge.label,
       });
       bound++;
     } catch (error) {
