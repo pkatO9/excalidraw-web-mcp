@@ -55,6 +55,33 @@ let registered: WebMcpTool[] = [];
  */
 let providerApi: ExcalidrawImperativeAPI | null = null;
 
+export type ProviderStatus = { mode: ProviderMode; count: number };
+
+/**
+ * Which provider is in play is not decided once and for all. A browser or an
+ * extension can expose `navigator.modelContext` after the editor has already
+ * mounted, and when that happens the surface changes underneath the UI — so
+ * anything displaying it has to be told, not asked once.
+ */
+const listeners = new Set<(status: ProviderStatus) => void>();
+
+const notify = () => {
+  const status: ProviderStatus = { mode, count: registered.length };
+  for (const listener of listeners) {
+    listener(status);
+  }
+};
+
+/** Watch the provider mode. Returns an unsubscribe. */
+export const subscribeProvider = (
+  listener: (status: ProviderStatus) => void,
+) => {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+};
+
 const asText = (value: unknown) =>
   typeof value === "string" ? value : JSON.stringify(value ?? null);
 
@@ -127,8 +154,139 @@ const installShim = (): ModelContextLike => {
       tools.delete(name);
     },
   };
-  (navigator as any).modelContext = shim;
+  // Not a plain assignment. Something else may install the real thing after
+  // us — a browser that exposes the API late, or an extension whose content
+  // script is injected when the user activates it, which is well after the
+  // editor mounts. A plain assignment leaves our shim sitting on `navigator`
+  // as the answer to `if (!navigator.modelContext)`, so the injector either
+  // declines to install (the browser never learns this page has tools) or
+  // overwrites us and our declarations vanish with no re-register.
+  //
+  // An accessor makes the handover explicit: whoever assigns wins, and we
+  // notice and hand our tools over. The property stays configurable, so an
+  // injector that uses defineProperty instead of assignment also succeeds —
+  // that case is caught by the poll in `startWatchingForNative`.
+  let current: ModelContextLike = shim;
+  try {
+    Object.defineProperty(navigator, "modelContext", {
+      configurable: true,
+      enumerable: true,
+      get: () => current,
+      set: (incoming: ModelContextLike) => {
+        current = incoming;
+        adoptIfNative();
+      },
+    });
+  } catch {
+    // Some engine refused the accessor; a plain assignment still gets the app
+    // working, just without the automatic handover.
+    (navigator as any).modelContext = shim;
+  }
   return shim;
+};
+
+const isShim = (context: unknown) => Boolean((context as any)?.[SHIM_FLAG]);
+
+/**
+ * Hand the current declarations to a context object.
+ *
+ * Split out of `registerCanvasTools` because it is also what a handover needs:
+ * when a native implementation turns up mid-session, the tools it must be told
+ * about are the ones already built for the live canvas.
+ */
+const publishTo = (context: ModelContextLike) => {
+  if (context.provideContext) {
+    context.provideContext({ tools: registered });
+  } else if (context.registerTool) {
+    // Older shape: no batch call, so register one at a time and tolerate the
+    // duplicates a remount would otherwise throw on.
+    for (const tool of registered) {
+      try {
+        context.unregisterTool?.(tool.name);
+      } catch {
+        // nothing registered under that name yet
+      }
+      context.registerTool(tool);
+    }
+  }
+};
+
+/**
+ * If a real implementation is on `navigator` now, switch to it.
+ *
+ * Returns whether the handover happened, so the poll can stop.
+ */
+const adoptIfNative = () => {
+  const context = (navigator as any).modelContext as
+    | ModelContextLike
+    | undefined;
+  if (!context || isShim(context)) {
+    return false;
+  }
+
+  mode = "native";
+  publishTo(context);
+  stopWatchingForNative();
+  notify();
+  return true;
+};
+
+/** How long to keep looking for a native implementation, and how often. */
+const NATIVE_WATCH_INTERVAL_MS = 500;
+const NATIVE_WATCH_WINDOW_MS = 30_000;
+
+let watchTimer: ReturnType<typeof setInterval> | null = null;
+let watchingEvents = false;
+
+const onMaybeNative = () => {
+  adoptIfNative();
+};
+
+/**
+ * Look for a native implementation arriving after we have already fallen back
+ * to the shim.
+ *
+ * The accessor in `installShim` catches an assignment; this catches the rest —
+ * a defineProperty that replaces our accessor outright, and an extension that
+ * only injects once the user activates it, which can be minutes later. Hence
+ * the focus and visibility checks outliving the poll: coming back to the tab
+ * after enabling something is exactly when a new provider tends to appear.
+ */
+const startWatchingForNative = () => {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  if (!watchTimer) {
+    const deadline = Date.now() + NATIVE_WATCH_WINDOW_MS;
+    watchTimer = setInterval(() => {
+      if (adoptIfNative()) {
+        return;
+      }
+      if (Date.now() >= deadline && watchTimer) {
+        clearInterval(watchTimer);
+        watchTimer = null;
+      }
+    }, NATIVE_WATCH_INTERVAL_MS);
+  }
+
+  if (!watchingEvents) {
+    window.addEventListener("focus", onMaybeNative);
+    document.addEventListener("visibilitychange", onMaybeNative);
+    watchingEvents = true;
+  }
+};
+
+const stopWatchingForNative = () => {
+  if (watchTimer) {
+    clearInterval(watchTimer);
+    watchTimer = null;
+  }
+  if (watchingEvents) {
+    window.removeEventListener("focus", onMaybeNative);
+    document.removeEventListener("visibilitychange", onMaybeNative);
+    watchingEvents = false;
+  }
 };
 
 const getModelContext = (): ModelContextLike => {
@@ -154,21 +312,17 @@ export const registerCanvasTools = (api: ExcalidrawImperativeAPI) => {
     toWebMcpTool(declaration, api),
   );
 
-  if (context.provideContext) {
-    context.provideContext({ tools: registered });
-  } else if (context.registerTool) {
-    // Older shape: no batch call, so register one at a time and tolerate the
-    // duplicates a remount would otherwise throw on.
-    for (const tool of registered) {
-      try {
-        context.unregisterTool?.(tool.name);
-      } catch {
-        // nothing registered under that name yet
-      }
-      context.registerTool(tool);
-    }
+  publishTo(context);
+
+  // Running on the shim is a fallback, not a verdict: keep looking for the
+  // real thing rather than reporting "shim" for the life of the page.
+  if (mode === "shim") {
+    startWatchingForNative();
+  } else {
+    stopWatchingForNative();
   }
 
+  notify();
   return { mode, count: registered.length };
 };
 
@@ -188,6 +342,8 @@ export const unregisterCanvasTools = () => {
   }
   registered = [];
   providerApi = null;
+  stopWatchingForNative();
+  notify();
 };
 
 /**

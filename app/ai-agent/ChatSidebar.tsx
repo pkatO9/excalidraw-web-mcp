@@ -10,6 +10,7 @@ import { get_scene } from "./toolLayer";
 import {
   callTool,
   registerCanvasTools,
+  subscribeProvider,
   toolsForModel,
   unregisterCanvasTools,
 } from "./webmcp/provider";
@@ -115,12 +116,22 @@ export const AIChatSidebar = () => {
   // Declare the canvas to the browser for as long as the editor is mounted, so
   // an agent can discover it. Our own agents call the very same tools through
   // `callTool`, which is what keeps this surface honest.
+  //
+  // Subscribed rather than read once: a browser or extension can expose
+  // `navigator.modelContext` after the editor has mounted, and the provider
+  // hands the tools over when it does. Reading the mode once left the badge
+  // saying "shim" for the rest of the session even though the page had since
+  // become a real WebMCP provider.
   useEffect(() => {
     if (!excalidrawAPI) {
       return undefined;
     }
+    const unsubscribe = subscribeProvider(setProvider);
     setProvider(registerCanvasTools(excalidrawAPI));
-    return () => unregisterCanvasTools();
+    return () => {
+      unsubscribe();
+      unregisterCanvasTools();
+    };
   }, [excalidrawAPI]);
   const [referencesExpanded, setReferencesExpanded] = useState(false);
   const { onResizeStart, resetWidth } = useResizableSidebar();
@@ -283,7 +294,7 @@ export const AIChatSidebar = () => {
             title={
               provider.mode === "native"
                 ? "This browser implements navigator.modelContext; the canvas is registered with it and any agent can discover these tools."
-                : "This browser has no navigator.modelContext, so a spec-shaped shim is in use. Same code path, but only this page can see the tools."
+                : "This browser has not exposed navigator.modelContext, so a spec-shaped shim is in use. Same code path, but only this page can see the tools — an external agent cannot. If the browser or an extension provides one later, the canvas is handed over automatically and this switches to native."
             }
           >
             WebMCP · {provider.mode} · {provider.count} tools

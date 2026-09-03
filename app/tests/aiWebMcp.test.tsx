@@ -11,6 +11,7 @@ import {
   getProviderMode,
   getRegisteredTools,
   registerCanvasTools,
+  subscribeProvider,
   toolsForModel,
   unregisterCanvasTools,
 } from "../ai-agent/webmcp/provider";
@@ -80,6 +81,80 @@ describe("WebMCP provider", () => {
     expect(mode).toBe("native");
     expect(provideContext).toHaveBeenCalledTimes(1);
     expect(provideContext.mock.calls[0][0].tools).toHaveLength(count);
+  });
+
+  /**
+   * The shim is a fallback, not a verdict.
+   *
+   * `navigator.modelContext` does not always exist by the time the editor
+   * mounts — a browser can expose it late, and an extension's content script
+   * is often injected only when the user activates it, long after. The old
+   * code answered that by assigning its shim over the property and deciding
+   * the mode once. Two things then went wrong at once: an injector guarding on
+   * `if (!navigator.modelContext)` found ours and never installed, so no
+   * external agent could reach the canvas; and the badge said "shim" for the
+   * rest of the session whatever happened afterwards.
+   */
+  describe("handing over to a native implementation that arrives late", () => {
+    it("adopts one assigned after the editor has already registered", () => {
+      registerCanvasTools(api);
+      expect(getProviderMode()).toBe("shim");
+
+      const provideContext = vi.fn();
+      (navigator as any).modelContext = { provideContext };
+
+      expect(getProviderMode()).toBe("native");
+      expect(provideContext).toHaveBeenCalledTimes(1);
+      expect(provideContext.mock.calls[0][0].tools).toHaveLength(
+        TOOL_DECLARATIONS.length,
+      );
+    });
+
+    it("does not leave its shim in the way of the assignment", () => {
+      registerCanvasTools(api);
+
+      const native = { provideContext: vi.fn() };
+      (navigator as any).modelContext = native;
+
+      // Reading it back has to give the real implementation, or an injector
+      // that checks its own work concludes the install failed.
+      expect((navigator as any).modelContext).toBe(native);
+    });
+
+    it("tells the UI, so the badge stops claiming shim", () => {
+      const seen: string[] = [];
+      const unsubscribe = subscribeProvider(({ mode }) => seen.push(mode));
+
+      registerCanvasTools(api);
+      (navigator as any).modelContext = { provideContext: vi.fn() };
+      unsubscribe();
+
+      expect(seen).toContain("shim");
+      expect(seen[seen.length - 1]).toBe("native");
+    });
+
+    it("notices one installed with defineProperty rather than assignment", () => {
+      vi.useFakeTimers();
+      try {
+        registerCanvasTools(api);
+
+        // Redefining the property bypasses our setter entirely, so the only
+        // way to find out is to look again.
+        const provideContext = vi.fn();
+        Object.defineProperty(navigator, "modelContext", {
+          configurable: true,
+          value: { provideContext },
+        });
+        expect(getProviderMode()).toBe("shim");
+
+        vi.advanceTimersByTime(1000);
+
+        expect(getProviderMode()).toBe("native");
+        expect(provideContext).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it("runs a tool through the WebMCP surface and changes the canvas", async () => {
