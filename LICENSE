@@ -19,11 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-This repository contains only the agent additions layered on top of Excalidraw.
-`setup.sh` clones upstream Excalidraw at build time rather than vendoring it.
-
-Excalidraw is Copyright (c) 2020 Excalidraw and is also distributed under the
-MIT License: https://github.com/excalidraw/excalidraw/blob/master/LICENSE

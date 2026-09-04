@@ -629,4 +629,6 @@ This repo contains only the agent additions; `setup.sh` clones upstream Excalidr
 build time rather than vendoring it.
 
 This project is released under the [MIT License](LICENSE), the same licence as upstream
-Excalidraw.
+Excalidraw. `LICENSE` is kept as the unmodified MIT text so GitHub detects it and shows
+**MIT** in the repository's About section; the upstream attribution above is recorded
+separately in [NOTICE](NOTICE).
